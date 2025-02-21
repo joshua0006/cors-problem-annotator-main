@@ -9,6 +9,9 @@ import DocumentList from './DocumentList';
 import { useToast } from '../contexts/ToastContext';
 import { getFolderContents } from '../services/folderService';
 import { collection, query, where, getDocs } from 'firebase/firestore';
+import { motion } from "framer-motion";
+import { Building2 } from "lucide-react";
+import { useOrganization } from '../contexts/OrganizationContext';
 
 export default function SharedContent() {
   const { token } = useParams();
@@ -19,6 +22,7 @@ export default function SharedContent() {
     documents: Document[];
     folders: Folder[];
   }>();
+  const { settings } = useOrganization();
 
   const logError = (error: Error) => {
     console.error('SharedContent Error:', {
@@ -161,45 +165,68 @@ export default function SharedContent() {
   }
 
   return (
-    <div className="h-full p-4">
-      {content && 'type' in content ? (
-        <div className="h-full w-full">
-          <iframe
-            src={content.fileUrl}
-            title={content.name}
-            className="w-full h-full border-none"
-            style={{ minHeight: 'calc(100vh - 4rem)' }}
+    <div className="h-full flex flex-col">
+      <header className="bg-white shadow-sm py-4 px-6 border-b border-gray-200">
+        <div className="max-w-8xl mx-auto">
+          <motion.div 
+            initial={{ opacity: 0, x: -20 }}
+            animate={{ opacity: 1, x: 0 }}
+            className="flex items-center space-x-2"
           >
-            <p className="text-center p-4">
-              Your browser does not support PDFs. 
-              <a href={content.fileUrl} className="text-blue-500 hover:underline ml-2">
-                Download PDF
-              </a>
-            </p>
-          </iframe>
+            <Building2 className="w-8 h-8 text-primary-600" />
+            <span className="text-xl font-semibold text-gradient">
+              {settings?.name || 'Structify'}
+            </span>
+          </motion.div>
         </div>
-      ) : (
-        <DocumentList
-          isSharedView={true}
-          sharedDocuments={content?.documents || []}
-          sharedFolders={content?.folders || []}
-          currentFolder={content ? {
-            id: content.id,
-            name: content.name,
-            parentId: '',
-            ownerId: '',
-            createdAt: new Date()
-          } : undefined}
-          projectId=""
-          onPreview={() => {}}
-          onCreateFolder={() => Promise.resolve()}
-          onCreateDocument={() => Promise.resolve()}
-          onUpdateFolder={() => Promise.resolve()}
-          onDeleteFolder={() => Promise.resolve()}
-          onUpdateDocument={() => Promise.resolve()}
-          onDeleteDocument={() => Promise.resolve()}
-        />
-      )}
+      </header>
+
+      <div className="p-4 flex-1 min-h-0">
+        {content && 'type' in content ? (
+          <div className="h-[calc(100vh-100px)] w-full max-w-9xl mx-auto relative">
+            <iframe
+              src={content.url}
+              title={content.name}
+              className="w-full h-full border-none rounded-lg shadow-sm bg-white"
+              style={{ 
+                pointerEvents: 'auto',
+                minHeight: 'calc(100vh - 160px)'
+              }}
+              onContextMenu={(e) => e.preventDefault()}
+            />
+            <div className="absolute inset-0 z-10" 
+                 style={{ 
+                   pointerEvents: 'none',
+                   userSelect: 'none',
+                   touchAction: 'none'
+                 }} 
+            />
+          </div>
+        ) : (
+          <DocumentList
+            isSharedView={true}
+            sharedDocuments={content?.documents || []}
+            sharedFolders={content?.folders || []}
+            currentFolder={content ? {
+              id: content.id,
+              name: content.name,
+              parentId: '',
+              ownerId: '',
+              createdAt: new Date()
+            } : undefined}
+            projectId=""
+            onPreview={(doc) => {
+              setContent(doc);
+            }}
+            onCreateFolder={() => Promise.resolve()}
+            onCreateDocument={() => Promise.resolve()}
+            onUpdateFolder={() => Promise.resolve()}
+            onDeleteFolder={() => Promise.resolve()}
+            onUpdateDocument={() => Promise.resolve()}
+            onDeleteDocument={() => Promise.resolve()}
+          />
+        )}
+      </div>
     </div>
   );
 } 

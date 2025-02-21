@@ -207,7 +207,7 @@ export default function DocumentList({
         }`}
       >
         {renderBreadcrumbs()}
-        {!selectedDocument && (
+        {!selectedDocument && !isSharedView && (
           <DocumentActions
             projectId={projectId}
             currentFolderId={currentFolder?.id}
@@ -259,44 +259,32 @@ export default function DocumentList({
                     className="flex items-left space-x-3 flex-1"
                   >
                     <FolderOpen className="w-6 h-6 text-gray-400" />
-                    {editingId === folder.id ? (
-                      <input
-                        type="text"
-                        value={editName}
-                        onChange={(e) => setEditName(e.target.value)}
-                        onKeyDown={(e) =>
-                          e.key === "Enter" &&
-                          handleSaveEdit(folder.id, "folder")
-                        }
-                        className="flex-1 px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        autoFocus
-                      />
-                    ) : (
-                      <span className="font-medium text-gray-900">
-                        {folder.name}
-                      </span>
-                    )}
+                    <span className="font-medium text-gray-900">
+                      {folder.name}
+                    </span>
                   </button>
-                  <div className="flex items-center space-x-2">
-                    <button
-                      onClick={() => handleStartEdit(folder.id, folder.name)}
-                      className="p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100"
-                    >
-                      <Pencil className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => onDeleteFolder(folder.id)}
-                      className="p-1 text-gray-400 hover:text-red-600 rounded-full hover:bg-gray-100"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => handleShare(folder.id, true)}
-                      className="p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100"
-                    >
-                      <Share2 className="w-4 h-4" />
-                    </button>
-                  </div>
+                  {!isSharedView && (
+                    <div className="flex items-center space-x-2">
+                      <button
+                        onClick={() => handleStartEdit(folder.id, folder.name)}
+                        className="p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => onDeleteFolder(folder.id)}
+                        className="p-1 text-gray-400 hover:text-red-600 rounded-full hover:bg-gray-100"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => handleShare(folder.id, true)}
+                        className="p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100"
+                      >
+                        <Share2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  )}
                 </motion.div>
               ))}
 
@@ -308,64 +296,52 @@ export default function DocumentList({
                   className="flex items-center justify-between p-3 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
                 >
                   <button
-                    onClick={() => setSelectedDocument(doc)}
+                    onClick={() => {
+                      if (isSharedView) {
+                        onPreview(doc);
+                      } else {
+                        setSelectedDocument(doc);
+                      }
+                    }}
                     className="flex items-center space-x-3 flex-1"
                   >
                     <FileText className="w-6 h-6 text-gray-400" />
                     <div>
-                      {editingId === doc.id ? (
-                        <input
-                          type="text"
-                          value={editName}
-                          onChange={(e) => setEditName(e.target.value)}
-                          onKeyDown={(e) =>
-                            e.key === "Enter" &&
-                            handleSaveEdit(doc.id, "document")
-                          }
-                          className="px-2 py-1 border border-gray-200 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
-                          autoFocus
-                        />
-                      ) : (
-                        <div class="text-left">
-                          <span className="font-medium text-gray-900">
-                            {doc.name}
-                          </span>
-                          <span className="ml-2 text-sm text-gray-500">
-                            v{doc.version}
-                          </span>
-                        </div>
-                      )}
+                      <div className="text-left">
+                        <span className="font-medium text-gray-900">
+                          {doc.name}
+                        </span>
+                        <span className="ml-2 text-sm text-gray-500">
+                          v{doc.version}
+                        </span>
+                      </div>
                       <p className="text-xs text-gray-500">
                         Modified: {formatDate(doc.dateModified)}
                       </p>
                     </div>
                   </button>
-                  <div className="flex items-center space-x-1">
-                    <button
-                      onClick={() => onPreview(doc)}
-                      className="p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100"
-                    >
-                      <Eye className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => handleStartEdit(doc.id, doc.name)}
-                      className="p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100"
-                    >
-                      <Pencil className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => onDeleteDocument(doc.id)}
-                      className="p-1 text-gray-400 hover:text-red-600 rounded-full hover:bg-gray-100"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => handleShare(doc.id, false)}
-                      className="p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100"
-                    >
-                      <Share2 className="w-4 h-4" />
-                    </button>
-                  </div>
+                  {!isSharedView && (
+                    <div className="flex items-center space-x-1">
+                      <button
+                        onClick={() => handleStartEdit(doc.id, doc.name)}
+                        className="p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100"
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => onDeleteDocument(doc.id)}
+                        className="p-1 text-gray-400 hover:text-red-600 rounded-full hover:bg-gray-100"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => handleShare(doc.id, false)}
+                        className="p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100"
+                      >
+                        <Share2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  )}
                 </motion.div>
               ))}
 

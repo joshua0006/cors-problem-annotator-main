@@ -41,6 +41,7 @@ import { storage } from "../lib/firebase";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { PDFViewer } from "./PDFViewer";
 import { Toolbar } from "./Toolbar";
+import { Button } from "./ui/button";
 
 interface Document {
   id: string;
@@ -94,9 +95,10 @@ interface Comment {
 interface DocumentViewerProps {
   document: Document;
   onClose: () => void;
-  onRefresh?: () => Promise<void>;
-  folders?: Folder[];
-  onNavigateToFolder?: (folder?: Folder) => void;
+  onRefresh?: () => void;
+  folders: Folder[];
+  onNavigateToFolder: (folder?: Folder) => void;
+  isShared?: boolean;
   viewerHeight: number;
 }
 
@@ -323,6 +325,7 @@ const CommentSection = memo(
 const DocumentViewer: React.FC<DocumentViewerProps> = ({
   document,
   viewerHeight,
+  isShared,
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
@@ -636,6 +639,14 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
     setNewComment(e.target.value);
   };
 
+  const handleAddAnnotation = () => {
+    // Implementation of handleAddAnnotation
+  };
+
+  const handleDownload = () => {
+    // Implementation of handleDownload
+  };
+
   return (
     <div className="flex flex-col h-full">
       {/* Document Header */}
@@ -878,6 +889,19 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
           </div>
         )}
       </div>
+
+      {!isShared && (
+        <div className="flex items-center space-x-4">
+          <Button variant="outline" onClick={handleAddAnnotation}>
+            <MessageSquare className="w-4 h-4 mr-2" />
+            Add Annotation
+          </Button>
+          <Button variant="outline" onClick={handleDownload}>
+            <Download className="w-4 h-4 mr-2" />
+            Download
+          </Button>
+        </div>
+      )}
     </div>
   );
 };
