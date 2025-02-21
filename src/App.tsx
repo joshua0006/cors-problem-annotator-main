@@ -10,6 +10,7 @@ import { PDFViewer } from "./components/PDFViewer";
 import { ToastProvider } from "./contexts/ToastContext";
 import { KeyboardShortcutGuide } from "./components/KeyboardShortcutGuide";
 import { useKeyboardShortcutGuide } from "./hooks/useKeyboardShortcutGuide";
+import SharedContent from './components/SharedContent';
 
 // Protected Route Component
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -54,6 +55,10 @@ export const App: React.FC = () => {
                     <AppContent />
                   </ProtectedRoute>
                 }
+              />
+              <Route
+                path="/shared/:token"
+                element={<SharedContent />}
               />
             </Routes>
             <PDFViewer file={file} documentId={documentId} />

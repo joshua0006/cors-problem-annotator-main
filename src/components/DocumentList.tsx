@@ -8,6 +8,7 @@ import {
   Loader2,
   ChevronRight,
   Home,
+  Share2,
 } from "lucide-react";
 import { useState } from "react";
 import { Document, Folder } from "../types";
@@ -16,6 +17,9 @@ import DocumentActions from "./DocumentActions";
 import DocumentViewer from "./DocumentViewer";
 import { motion, AnimatePresence } from "framer-motion";
 import { Timestamp } from "firebase/firestore";
+import { createShareToken } from '../services/shareService';
+import { useToast } from '../contexts/ToastContext';
+import { useAuth } from '../contexts/AuthContext';
 
 interface DocumentListProps {
   documents: Document[];
@@ -36,6 +40,10 @@ interface DocumentListProps {
   onUpdateDocument: (id: string, updates: Partial<Document>) => Promise<void>;
   onDeleteDocument: (id: string) => Promise<void>;
   onRefresh?: () => Promise<void>;
+  onShare: (id: string, isFolder: boolean) => Promise<void>;
+  isSharedView?: boolean;
+  sharedDocuments?: Document[];
+  sharedFolders?: Folder[];
 }
 
 const formatDate = (date: string | Timestamp | Date) => {
@@ -65,16 +73,22 @@ export default function DocumentList({
   onUpdateDocument,
   onDeleteDocument,
   onRefresh,
+  onShare,
+  isSharedView,
+  sharedDocuments,
+  sharedFolders,
 }: DocumentListProps) {
   const [editingId, setEditingId] = useState<string>();
   const [editName, setEditName] = useState("");
   const [selectedDocument, setSelectedDocument] = useState<Document>();
   const [loading, setLoading] = useState(false);
+  const { showToast } = useToast();
+  const { user } = useAuth();
 
-  const currentDocs = documents.filter(
+  const currentDocs = isSharedView ? sharedDocuments || [] : documents.filter(
     (doc) => doc.folderId === currentFolder?.id
   );
-  const subFolders = folders.filter(
+  const subFolders = isSharedView ? sharedFolders || [] : folders.filter(
     (folder) => folder.parentId === currentFolder?.id
   );
 
@@ -110,6 +124,26 @@ export default function DocumentList({
       setSelectedDocument(undefined);
     }
     onFolderSelect?.(folder);
+  };
+
+  const handleShare = async (resourceId: string, isFolder: boolean) => {
+    try {
+      const token = await createShareToken(
+        resourceId,
+        isFolder ? 'folder' : 'file',
+        user?.uid || '',
+        { expiresInHours: 168 } // 7 days
+      );
+      
+      // Copy to clipboard
+      const shareUrl = `${window.location.origin}/shared/${token.id}`;
+      navigator.clipboard.writeText(shareUrl);
+      
+      showToast('Share link copied to clipboard', 'success');
+    } catch (error) {
+      console.error('Sharing failed:', error);
+      showToast('Failed to create share link', 'error');
+    }
   };
 
   const renderBreadcrumbs = () => {
@@ -256,6 +290,12 @@ export default function DocumentList({
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
+                    <button
+                      onClick={() => handleShare(folder.id, true)}
+                      className="p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100"
+                    >
+                      <Share2 className="w-4 h-4" />
+                    </button>
                   </div>
                 </motion.div>
               ))}
@@ -318,6 +358,12 @@ export default function DocumentList({
                       className="p-1 text-gray-400 hover:text-red-600 rounded-full hover:bg-gray-100"
                     >
                       <Trash2 className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => handleShare(doc.id, false)}
+                      className="p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100"
+                    >
+                      <Share2 className="w-4 h-4" />
                     </button>
                   </div>
                 </motion.div>

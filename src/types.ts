@@ -179,3 +179,13 @@ export interface AuthContextType extends AuthState {
   canUploadDocuments: () => boolean;
   canComment: () => boolean;
 }
+
+export interface ShareToken {
+  id: string;
+  resourceId: string;
+  type: 'file' | 'folder';
+  expiresAt: Date | firebase.firestore.Timestamp;
+  permissions: string[];
+  creatorId: string;
+  createdAt: Date;
+}

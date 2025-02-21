@@ -1,5 +1,11 @@
 import { initializeApp } from 'firebase/app';
-import { getFirestore } from 'firebase/firestore';
+import { 
+  getFirestore, 
+  connectFirestoreEmulator,
+  enableIndexedDbPersistence,
+  getDocs,
+  collection
+} from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
 import { getAuth } from 'firebase/auth';
 
@@ -15,9 +21,37 @@ const firebaseConfig = {
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
 
-// Get Firebase services
+// Initialize Firestore
 export const db = getFirestore(app);
+
+// Configure persistence
+enableIndexedDbPersistence(db)
+  .catch((err) => {
+    console.error('Persistence failed:', err.code);
+  });
+
+// Emulator connection (only in development)
+if (process.env.NODE_ENV === 'development') {
+  try {
+    connectFirestoreEmulator(db, 'localhost', 8080);
+    console.log('Connected to Firestore emulator');
+  } catch (error) {
+    console.log('Using production Firestore instance');
+  }
+}
+
 export const storage = getStorage(app);
 export const auth = getAuth(app);
+
+console.log('Using Firebase project:', firebaseConfig.projectId);
+
+export const checkFirestoreConnection = async () => {
+  try {
+    const querySnapshot = await getDocs(collection(db, 'shareTokens'));
+    console.log('Total tokens in database:', querySnapshot.size);
+  } catch (error) {
+    console.error('Firestore connection failed:', error);
+  }
+};
 
 export default app;
