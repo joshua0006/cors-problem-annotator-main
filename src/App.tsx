@@ -11,6 +11,7 @@ import { ToastProvider } from "./contexts/ToastContext";
 import { KeyboardShortcutGuide } from "./components/KeyboardShortcutGuide";
 import { useKeyboardShortcutGuide } from "./hooks/useKeyboardShortcutGuide";
 import SharedContent from './components/SharedContent';
+import { Toolbar } from './components/Toolbar';
 
 // Protected Route Component
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -45,23 +46,26 @@ export const App: React.FC = () => {
       <AuthProvider>
         <OrganizationProvider>
           <ToastProvider>
-            <Routes>
-              <Route path="/signin" element={<SignIn />} />
-              <Route path="/signup" element={<SignUp />} />
-              <Route
-                path="/*"
-                element={
-                  <ProtectedRoute>
-                    <AppContent />
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/shared/:token"
-                element={<SharedContent />}
-              />
-            </Routes>
-            <PDFViewer file={file} documentId={documentId} />
+            {/* Main application layout wrapper */}
+            
+              <Routes>
+                <Route path="/signin" element={<SignIn />} />
+                <Route path="/signup" element={<SignUp />} />
+                <Route
+                  path="/*"
+                  element={
+                    <ProtectedRoute>
+                      <AppContent />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/shared/:token"
+                  element={<SharedContent />}
+                />
+              </Routes>
+          
+            
             {isShortcutGuideOpen && (
               <KeyboardShortcutGuide
                 onClose={() => setIsShortcutGuideOpen(false)}

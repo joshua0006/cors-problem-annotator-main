@@ -5,6 +5,17 @@ import {
   ArrowUpDown,
   StepForward,
   ShowerHead,
+  MousePointer,
+  Pencil,
+  Highlighter,
+  Circle,
+  Triangle,
+  Star,
+  Minus,
+  ArrowUpRight,
+  ArrowRightLeft,
+  Type,
+  StickyNote
 } from "lucide-react";
 
 export const COLORS = [
@@ -53,19 +64,19 @@ export const TOOLS = {
   basic: [
     {
       tool: "select",
-      icon: "MousePointer",
+      icon: MousePointer,
       label: "Select",
       shortcut: KEYBOARD_SHORTCUTS.tools.select,
     },
     {
       tool: "freehand",
-      icon: "Pencil",
+      icon: Pencil,
       label: "Freehand",
       shortcut: KEYBOARD_SHORTCUTS.tools.freehand,
     },
     {
       tool: "highlight",
-      icon: "Highlighter",
+      icon: Highlighter,
       label: "Highlight",
       shortcut: KEYBOARD_SHORTCUTS.tools.highlight,
     },
@@ -73,42 +84,42 @@ export const TOOLS = {
   shapes: [
     {
       tool: "rectangle",
-      icon: "Square",
+      icon: Square,
       label: "Rectangle",
       shortcut: KEYBOARD_SHORTCUTS.tools.rectangle,
     },
     {
       tool: "circle",
-      icon: "Circle",
+      icon: Circle,
       label: "Circle",
       shortcut: KEYBOARD_SHORTCUTS.tools.circle,
     },
-    { tool: "triangle", icon: "Triangle", label: "Triangle" },
-    { tool: "star", icon: "Star", label: "Star" },
+    { tool: "triangle", icon: Triangle, label: "Triangle" },
+    { tool: "star", icon: Star, label: "Star" },
   ],
   lines: [
     {
       tool: "line",
-      icon: "Minus",
+      icon: Minus,
       label: "Line",
       shortcut: KEYBOARD_SHORTCUTS.tools.line,
     },
     {
       tool: "arrow",
-      icon: "ArrowUpRight",
+      icon: ArrowUpRight,
       label: "Arrow",
       shortcut: KEYBOARD_SHORTCUTS.tools.arrow,
     },
-    { tool: "doubleArrow", icon: "ArrowRightLeft", label: "Double Arrow" },
+    { tool: "doubleArrow", icon: ArrowRightLeft, label: "Double Arrow" },
   ],
   text: [
     {
       tool: "text",
-      icon: "Type",
+      icon: Type,
       label: "Text",
       shortcut: KEYBOARD_SHORTCUTS.tools.text,
     },
-    { tool: "stickyNote", icon: "StickyNote", label: "Sticky Note" },
+    { tool: "stickyNote", icon: StickyNote, label: "Sticky Note" },
   ],
   architectural: [
     {

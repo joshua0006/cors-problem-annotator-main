@@ -13,18 +13,46 @@ export const createExportCanvas = async (
   const viewport = page.getViewport({ scale });
   exportCanvas.width = viewport.width;
   exportCanvas.height = viewport.height;
-  const ctx = exportCanvas.getContext("2d")!;
+  const ctx = exportCanvas.getContext("2d", { alpha: false })!;
+  
+  // Set a white background
+  ctx.fillStyle = "white";
+  ctx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
 
   // Render the PDF page
   await page.render({
     canvasContext: ctx,
     viewport,
+    intent: "display"
   }).promise;
 
-  // Draw annotations
-  annotations.forEach((annotation) => {
-    drawAnnotation(ctx, annotation, scale);
+  // Draw annotations in two passes
+  // First pass: Draw all non-highlight annotations
+  const regularAnnotations = annotations.filter(a => a.type !== 'highlight');
+  regularAnnotations.forEach((annotation) => {
+    try {
+      drawAnnotation(ctx, annotation, scale);
+    } catch (error) {
+      console.error("Error drawing annotation:", error, annotation);
+    }
   });
+  
+  // Second pass: Draw highlights with proper blending
+  const highlightAnnotations = annotations.filter(a => a.type === 'highlight');
+  if (highlightAnnotations.length > 0) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'multiply';
+    
+    highlightAnnotations.forEach((annotation) => {
+      try {
+        drawAnnotation(ctx, annotation, scale);
+      } catch (error) {
+        console.error("Error drawing highlight:", error, annotation);
+      }
+    });
+    
+    ctx.restore();
+  }
 
   return { canvas: exportCanvas, viewport };
 };

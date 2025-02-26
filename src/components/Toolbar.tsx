@@ -11,6 +11,11 @@ import { useKeyboardShortcutGuide } from "../hooks/useKeyboardShortcutGuide";
 import { HelpCircle } from "lucide-react";
 import { useAnnotationStore } from "../store/useAnnotationStore";
 
+// Type assertion helper function
+const getOptionalShortcut = (tool: any): string | undefined => {
+  return tool.shortcut as string | undefined;
+};
+
 export const Toolbar = () => {
   const { setIsShortcutGuideOpen } = useKeyboardShortcutGuide();
   const { currentStyle, setCurrentStyle } = useAnnotationStore();
@@ -98,7 +103,7 @@ export const Toolbar = () => {
   );
 
   return (
-    <div className="w-64 bg-white border-r border-gray-200 overflow-y-auto">
+    <div className="toolbar-fixed bg-white border-r border-gray-200 overflow-y-auto" style={{ flexShrink: 0, minWidth: '16rem' }}>
       <ToolbarSection title="Basic Tools" defaultExpanded>
         {TOOLS.basic.map((tool) => (
           <ToolButton
@@ -106,7 +111,7 @@ export const Toolbar = () => {
             tool={tool.tool}
             icon={tool.icon}
             label={tool.label}
-            shortcut={tool.shortcut}
+            shortcut={getOptionalShortcut(tool)}
           />
         ))}
       </ToolbarSection>
@@ -117,7 +122,7 @@ export const Toolbar = () => {
             tool={tool.tool}
             icon={tool.icon}
             label={tool.label}
-            shortcut={tool.shortcut}
+            shortcut={getOptionalShortcut(tool)}
           />
         ))}
       </ToolbarSection>
@@ -128,7 +133,7 @@ export const Toolbar = () => {
             tool={tool.tool}
             icon={tool.icon}
             label={tool.label}
-            shortcut={tool.shortcut}
+            shortcut={getOptionalShortcut(tool)}
           />
         ))}
       </ToolbarSection>
@@ -139,7 +144,7 @@ export const Toolbar = () => {
             tool={tool.tool}
             icon={tool.icon}
             label={tool.label}
-            shortcut={tool.shortcut}
+            shortcut={getOptionalShortcut(tool)}
           />
         ))}
       </ToolbarSection>
@@ -150,7 +155,7 @@ export const Toolbar = () => {
             tool={tool.tool}
             icon={tool.icon}
             label={tool.label}
-            shortcut={tool.shortcut}
+            shortcut={getOptionalShortcut(tool)}
           />
         ))}
       </ToolbarSection>

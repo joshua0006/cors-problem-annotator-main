@@ -1,14 +1,15 @@
 import React from "react";
 import { useAnnotationStore } from "../../store/useAnnotationStore";
 import { AnnotationType } from "../../types/annotation";
+import { LucideProps } from "lucide-react";
 
 interface ToolButtonProps {
   tool: AnnotationType;
-  icon: React.ComponentType<{ size?: number }>;
+  icon: React.ComponentType<LucideProps>;
   label: string;
   shortcut?: string;
   onClick?: () => void;
-  rightIcon?: React.ComponentType<{ size?: number }>;
+  rightIcon?: React.ComponentType<LucideProps>;
 }
 
 export const ToolButton: React.FC<ToolButtonProps> = ({

@@ -22,11 +22,14 @@ export const drawCircle = (
 
   if (!isValidPoint(start) || !isValidPoint(end)) return;
 
-  const radius =
-    Math.sqrt(Math.pow(end.x - start.x, 2) + Math.pow(end.y - start.y, 2)) / 2;
+  // Calculate radius using scaled coordinates
+  const radius = Math.sqrt(
+    Math.pow((end.x - start.x) * scale, 2) + Math.pow((end.y - start.y) * scale, 2)
+  ) / 2;
 
-  const centerX = (start.x + end.x) / 2;
-  const centerY = (start.y + end.y) / 2;
+  // Calculate center with scaling applied
+  const centerX = (start.x + end.x) / 2 * scale;
+  const centerY = (start.y + end.y) / 2 * scale;
 
   ctx.beginPath();
   ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
@@ -59,12 +62,12 @@ export const drawRectangle = (
 
   if (!isValidPoint(start) || !isValidPoint(end)) return;
 
-  const width = end.x - start.x;
-  const height = end.y - start.y;
+  const width = (end.x - start.x) * scale;
+  const height = (end.y - start.y) * scale;
 
   // Draw the rectangle
   ctx.beginPath();
-  ctx.rect(start.x, start.y, width, height);
+  ctx.rect(start.x * scale, start.y * scale, width, height);
   ctx.stroke();
 };
 
@@ -85,11 +88,11 @@ export const drawTriangle = (
 
   ctx.beginPath();
   // Top point
-  ctx.moveTo(centerX, start.y);
+  ctx.moveTo(centerX * scale, start.y * scale);
   // Bottom left
-  ctx.lineTo(centerX - width / 2, start.y + height);
+  ctx.lineTo((centerX - width / 2) * scale, (start.y + height) * scale);
   // Bottom right
-  ctx.lineTo(centerX + width / 2, start.y + height);
+  ctx.lineTo((centerX + width / 2) * scale, (start.y + height) * scale);
   ctx.closePath();
   ctx.stroke();
 };
@@ -121,9 +124,9 @@ export const drawStar = (
     const y = centerY + Math.sin(angle) * radius;
 
     if (i === 0) {
-      ctx.moveTo(x, y);
+      ctx.moveTo(x * scale, y * scale);
     } else {
-      ctx.lineTo(x, y);
+      ctx.lineTo(x * scale, y * scale);
     }
   }
   ctx.closePath();
@@ -415,10 +418,11 @@ export const drawHighlight = (
   // Save context state
   ctx.save();
 
-  // Set highlight specific styles
-  ctx.globalAlpha = 0.3; // More transparent for highlights
-  ctx.fillStyle = style.color;
-  ctx.strokeStyle = "transparent";
+  // Set highlight specific styles - using a higher opacity for better visibility
+  ctx.globalAlpha = style.opacity || 0.3; // Use style opacity or default to 0.3
+  ctx.fillStyle = style.color || "#FFFF00"; // Use style color or default to yellow
+  ctx.strokeStyle = style.color || "#FFFF00"; // Add a stroke in the same color
+  ctx.lineWidth = 1 * scale; // Thin border for definition
 
   // Draw highlight as a filled path
   ctx.beginPath();
@@ -436,7 +440,12 @@ export const drawHighlight = (
   if (points.length > 2) {
     ctx.closePath();
   }
+  
+  // Fill with semi-transparent color
   ctx.fill();
+  
+  // Add a subtle stroke for better visibility
+  ctx.stroke();
 
   // Restore context state
   ctx.restore();
@@ -533,7 +542,25 @@ export const drawAnnotation = (
       drawRectangle(ctx, annotation.points, scale);
       break;
     case "circle":
-      drawCircle(ctx, annotation.points, scale);
+      // Support circleDiameterMode from the style property
+      const diameterMode = annotation.style.circleDiameterMode as boolean || false;
+      if (diameterMode && annotation.points.length === 2) {
+        // Use a different approach for diameter mode
+        const [p1, p2] = annotation.points;
+        // Calculate midpoint as the center
+        const centerX = (p1.x + p2.x) / 2 * scale;
+        const centerY = (p1.y + p2.y) / 2 * scale;
+        // Calculate radius as half the distance between points
+        const radius = Math.sqrt(
+          Math.pow((p2.x - p1.x) * scale, 2) + Math.pow((p2.y - p1.y) * scale, 2)
+        ) / 2;
+        
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
+      } else {
+        // Use the standard center-radius approach
+        drawCircle(ctx, annotation.points, scale);
+      }
       break;
     case "arrow":
     case "doubleArrow":
@@ -862,14 +889,19 @@ export const drawDoor = (
   ctx.lineWidth = 2 * scale;
 
   // Draw door frame
-  ctx.strokeRect(start.x * scale, start.y * scale, size, size);
+  ctx.strokeRect(
+    start.x * scale, 
+    start.y * scale, 
+    size * scale, 
+    size * scale
+  );
 
   // Draw door arc
   ctx.beginPath();
   ctx.arc(
-    start.x * scale + size,
-    start.y * scale + size / 2,
-    size / 2,
+    start.x * scale + size * scale,
+    start.y * scale + (size * scale) / 2,
+    (size * scale) / 2,
     Math.PI * 1.5,
     Math.PI * 0.5
   );
@@ -879,7 +911,7 @@ export const drawDoor = (
 };
 
 export const drawWindow = (
-  ctx: CanvasRenderingContext22D,
+  ctx: CanvasRenderingContext2D,
   points: Point[],
   scale: number
 ) => {
@@ -894,14 +926,14 @@ export const drawWindow = (
   ctx.lineWidth = 2 * scale;
 
   // Draw window frame
-  ctx.strokeRect(start.x * scale, start.y * scale, width, height);
+  ctx.strokeRect(start.x * scale, start.y * scale, width * scale, height * scale);
 
   // Draw window panes
   ctx.beginPath();
-  ctx.moveTo(start.x * scale + width / 2, start.y * scale);
-  ctx.lineTo(start.x * scale + width / 2, start.y * scale + height);
-  ctx.moveTo(start.x * scale, start.y * scale + height / 2);
-  ctx.lineTo(start.x * scale + width, start.y * scale + height / 2);
+  ctx.moveTo(start.x * scale + (width * scale) / 2, start.y * scale);
+  ctx.lineTo(start.x * scale + (width * scale) / 2, start.y * scale + height * scale);
+  ctx.moveTo(start.x * scale, start.y * scale + (height * scale) / 2);
+  ctx.lineTo(start.x * scale + width * scale, start.y * scale + (height * scale) / 2);
   ctx.stroke();
 
   ctx.restore();
@@ -1016,10 +1048,10 @@ export const drawElevator = (
   ctx.lineWidth = 2 * scale;
 
   // Draw elevator symbol
-  ctx.strokeRect(start.x * scale, start.y * scale, width, height);
+  ctx.strokeRect(start.x * scale, start.y * scale, width * scale, height * scale);
   ctx.beginPath();
-  ctx.moveTo(start.x * scale + width / 2, start.y * scale);
-  ctx.lineTo(start.x * scale + width / 2, start.y * scale + height);
+  ctx.moveTo(start.x * scale + (width * scale) / 2, start.y * scale);
+  ctx.lineTo(start.x * scale + (width * scale) / 2, start.y * scale + height * scale);
   ctx.stroke();
 
   ctx.restore();

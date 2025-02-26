@@ -32,7 +32,7 @@ export const useKeyboardShortcuts = (
     bringToFront,
     sendToBack,
     clipboardAnnotations,
-    store,
+    selectedAnnotations
   } = useAnnotationStore();
   const { showToast } = useToast();
 
@@ -60,32 +60,13 @@ export const useKeyboardShortcuts = (
             return;
           }
 
-          const newAnnotations = clipboardAnnotations.map((annotation) => ({
-            ...annotation,
-            id: Date.now() + Math.random().toString(),
-            pageNumber: currentPage,
-            timestamp: Date.now(),
-            points: annotation.points.map((p) => ({
-              x: p.x + 20,
-              y: p.y + 20,
-            })),
-          }));
-
-          const document = documents[documentId];
-          if (document) {
-            const updatedAnnotations = [
-              ...document.annotations,
-              ...newAnnotations,
-            ];
-
-            store.updateDocumentAnnotations(documentId, updatedAnnotations);
-
-            showToast(
-              `${newAnnotations.length} annotation${
-                newAnnotations.length > 1 ? "s" : ""
-              } pasted`
-            );
-          }
+          const pastedCount = pasteAnnotations(currentPage);
+          
+          showToast(
+            `${pastedCount} annotation${
+              pastedCount > 1 ? "s" : ""
+            } pasted`
+          );
         },
         ctrl: true,
       },
@@ -239,6 +220,6 @@ export const useKeyboardShortcuts = (
     bringToFront,
     sendToBack,
     clipboardAnnotations,
-    store,
+    selectedAnnotations
   ]);
 };

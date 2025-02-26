@@ -11,7 +11,7 @@ import {
   getShapeBounds,
   drawSelectionOutline,
 } from "../utils/drawingUtils";
-import { Point, Annotation } from "../types/annotation";
+import { Point, Annotation, AnnotationType } from "../types/annotation";
 import { TextInput } from "./TextInput";
 import { ContextMenu } from "./ContextMenu";
 import {
@@ -133,18 +133,17 @@ export const AnnotationCanvas: React.FC<AnnotationCanvasProps> = ({
     return null;
   };
 
-  const isPointInAnnotation = (
-    point: Point,
-    annotation: Annotation
-  ): boolean => {
+  const isPointInAnnotation = (point: Point, annotation: Annotation): boolean => {
+    if (!annotation.points.length) return false;
+
     if (annotation.type === "stamp") {
       return isPointInStamp(point, annotation);
     } else if (annotation.type === "highlight") {
-      return isPointInHighlight(point, annotation, scale);
+      return isPointInHighlight(point, annotation);
     }
 
     // Get bounds based on shape type
-    const bounds = getShapeBounds(annotation.points, annotation.type);
+    const bounds = getShapeBounds(annotation.points);
 
     // Add a small padding for easier selection
     const padding = 5 / scale;
@@ -323,7 +322,7 @@ export const AnnotationCanvas: React.FC<AnnotationCanvasProps> = ({
       // Update end point while keeping start point fixed
       setCurrentPoints((prev) => [prev[0], { x: point.x, y: point.y }]);
       render();
-    } else if (currentTool === "select") {
+    } else if (currentTool === "select" as AnnotationType) {
       const canvas = canvasRef.current;
       if (!canvas) return;
 
@@ -369,11 +368,31 @@ export const AnnotationCanvas: React.FC<AnnotationCanvasProps> = ({
 
       // Only create annotation if the shape has a minimum size
       if (dx >= 5 || dy >= 5) {
+        // For rectangle-like shapes, ensure we have four corner points
+        let annotationPoints = currentPoints;
+        
+        // Special handling for highlight: create a polygon with 4 points
+        if (currentTool === "highlight") {
+          // Create a rectangle/polygon for highlights
+          annotationPoints = [
+            { x: start.x, y: start.y },
+            { x: end.x, y: start.y },
+            { x: end.x, y: end.y },
+            { x: start.x, y: end.y }
+          ];
+        }
+        
         const newAnnotation: Annotation = {
           id: Date.now().toString(),
           type: currentTool,
-          points: currentPoints,
-          style: currentStyle,
+          points: annotationPoints,
+          style: {
+            ...currentStyle,
+            // Ensure opacity is appropriate for highlights
+            opacity: currentTool === "highlight" ? 0.3 : currentStyle.opacity,
+            // Ensure line width is appropriate for highlights
+            lineWidth: currentTool === "highlight" ? 12 : currentStyle.lineWidth
+          },
           pageNumber,
           timestamp: Date.now(),
           userId: "current-user",
@@ -403,11 +422,11 @@ export const AnnotationCanvas: React.FC<AnnotationCanvasProps> = ({
   const handleMouseLeave = () => {
     if (isDrawing && currentTool === "freehand" && currentPoints.length >= 2) {
       // Save the drawing if we have points
-      const smoothedPoints = smoothPoints(currentPoints);
+      // For freehand drawings, we just use the raw points since there's no smoothPoints function
       const newAnnotation: Annotation = {
         id: Date.now().toString(),
         type: "freehand",
-        points: smoothedPoints,
+        points: currentPoints,
         style: currentStyle,
         pageNumber,
         timestamp: Date.now(),
@@ -495,7 +514,7 @@ export const AnnotationCanvas: React.FC<AnnotationCanvasProps> = ({
     start: Point,
     end: Point
   ): boolean => {
-    const bounds = getShapeBounds(annotation.points, annotation.type);
+    const bounds = getShapeBounds(annotation.points);
     const selectionBounds = {
       left: Math.min(start.x, end.x),
       right: Math.max(start.x, end.x),

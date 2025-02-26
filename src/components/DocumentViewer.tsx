@@ -890,18 +890,7 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
         )}
       </div>
 
-      {!isShared && (
-        <div className="flex items-center space-x-4">
-          <Button variant="outline" onClick={handleAddAnnotation}>
-            <MessageSquare className="w-4 h-4 mr-2" />
-            Add Annotation
-          </Button>
-          <Button variant="outline" onClick={handleDownload}>
-            <Download className="w-4 h-4 mr-2" />
-            Download
-          </Button>
-        </div>
-      )}
+      
     </div>
   );
 };

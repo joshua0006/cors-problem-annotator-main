@@ -22,13 +22,33 @@ export const getAnnotationBounds = (annotation: Annotation, scale: number) => {
   const points = annotation.points;
   
   if (annotation.type === 'circle') {
-    const [center, edge] = points;
-    const radius = Math.sqrt(
-      Math.pow(edge.x - center.x, 2) + Math.pow(edge.y - center.y, 2)
-    );
+    const [start, end] = points;
+    // Safely access circleDiameterMode with a default value of false
+    const diameterMode = annotation.style?.circleDiameterMode as boolean || false;
+    
+    // Calculate radius based on the mode
+    let radius;
+    let centerX, centerY;
+
+    if (diameterMode) {
+      // In diameter mode, the center is the midpoint between the two points
+      centerX = (start.x + end.x) / 2;
+      centerY = (start.y + end.y) / 2;
+      radius = Math.sqrt(
+        Math.pow(end.x - start.x, 2) + Math.pow(end.y - start.y, 2)
+      ) / 2;
+    } else {
+      // In radius mode, the first point is the center
+      centerX = start.x;
+      centerY = start.y;
+      radius = Math.sqrt(
+        Math.pow(end.x - start.x, 2) + Math.pow(end.y - start.y, 2)
+      );
+    }
+    
     return {
-      x: center.x - radius,
-      y: center.y - radius,
+      x: centerX - radius,
+      y: centerY - radius,
       width: radius * 2,
       height: radius * 2,
     };
