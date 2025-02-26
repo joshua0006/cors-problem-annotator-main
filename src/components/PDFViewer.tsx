@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect } from "react";
+import React, { useRef, useState, useEffect, useCallback } from "react";
 import { AnnotationCanvas } from "./AnnotationCanvas";
 import { useAnnotationStore } from "../store/useAnnotationStore";
 import { PDFControls } from "./PDFViewer/PDFControls";
@@ -16,7 +16,7 @@ import {
 import { drawAnnotation } from "../utils/drawingUtils";
 import { useKeyboardShortcuts } from "../hooks/useKeyboardShortcuts";
 import { useToast } from "../contexts/ToastContext";
-import { ChevronLeft, ChevronRight, Download } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, AlertTriangle, RefreshCw } from "lucide-react";
 import { KeyboardShortcutGuide } from "./KeyboardShortcutGuide";
 import { useKeyboardShortcutGuide } from "../hooks/useKeyboardShortcutGuide";
 
@@ -62,12 +62,17 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [currentPage, setCurrentPage] = useState(1);
-  const [scale, setScale] = useState(1.0);
+  const [scale, setScale] = useState(0.75);
   const [containerWidth, setContainerWidth] = useState(0);
   const [containerHeight, setContainerHeight] = useState(0);
   const [isExporting, setIsExporting] = useState(false);
   const [isRendering, setIsRendering] = useState(false);
+  const [autoFitApplied, setAutoFitApplied] = useState(false);
+  const [renderAttempts, setRenderAttempts] = useState(0);
+  const [renderError, setRenderError] = useState<Error | null>(null);
+  const [isViewerReady, setIsViewerReady] = useState(false);
   const renderTaskRef = useRef<any>(null);
+  const renderTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const { currentTool } = useAnnotationStore();
   const store = useAnnotationStore();
 
@@ -89,30 +94,67 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
     const loadPdfFromUrl = async (url: string) => {
       try {
         setIsRendering(true);
+        setRenderError(null);
         console.log('Loading PDF from URL:', url);
         
         // Support both relative and absolute URLs
         const fullUrl = url.startsWith('http') ? url : new URL(url, window.location.href).toString();
-        const response = await fetch(fullUrl, {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/pdf',
-            'Cache-Control': 'no-cache',
-          },
-          mode: 'cors', // Try with cors mode first
-        });
         
-        if (!response.ok) {
-          throw new Error(`Failed to fetch PDF: ${response.status} ${response.statusText}`);
+        // First try with default mode
+        try {
+          const response = await fetch(fullUrl, {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/pdf',
+              'Cache-Control': 'no-cache',
+            },
+          });
+          
+          if (!response.ok) {
+            throw new Error(`Failed to fetch PDF: ${response.status} ${response.statusText}`);
+          }
+          
+          const blob = await response.blob();
+          const fileName = url.split('/').pop() || "document.pdf";
+          const file = new File([blob], fileName, { type: "application/pdf" });
+          
+          if (file.size === 0) {
+            throw new Error("Downloaded PDF is empty (0 bytes)");
+          }
+          
+          console.log('Successfully loaded PDF from URL, file size:', file.size);
+          setPdfFile(file);
+        } catch (error) {
+          console.warn("First fetch attempt failed, trying with CORS mode:", error);
+          
+          // Fallback to explicit cors mode
+          const response = await fetch(fullUrl, {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/pdf',
+              'Cache-Control': 'no-cache',
+            },
+            mode: 'cors',
+          });
+          
+          if (!response.ok) {
+            throw new Error(`Failed to fetch PDF: ${response.status} ${response.statusText}`);
+          }
+          
+          const blob = await response.blob();
+          const fileName = url.split('/').pop() || "document.pdf";
+          const file = new File([blob], fileName, { type: "application/pdf" });
+          
+          if (file.size === 0) {
+            throw new Error("Downloaded PDF is empty (0 bytes)");
+          }
+          
+          console.log('Successfully loaded PDF from URL with CORS mode, file size:', file.size);
+          setPdfFile(file);
         }
-        
-        const blob = await response.blob();
-        const fileName = url.split('/').pop() || "document.pdf";
-        const file = new File([blob], fileName, { type: "application/pdf" });
-        console.log('Successfully loaded PDF from URL, file size:', file.size);
-        setPdfFile(file);
       } catch (error) {
         console.error("Failed to load PDF from URL:", error);
+        setRenderError(error instanceof Error ? error : new Error(`Failed to load PDF: ${error}`));
         showToast(`Failed to load PDF: ${(error as Error).message}`, "error");
       } finally {
         setIsRendering(false);
@@ -122,19 +164,28 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
     if (typeof file === "string") {
       loadPdfFromUrl(file);
     } else if (file instanceof File) {
-      console.log('Loading PDF from File object, name:', file.name, 'size:', file.size);
-      setPdfFile(file);
+      if (file.size === 0) {
+        setRenderError(new Error("PDF file is empty (0 bytes)"));
+        showToast("PDF file is empty or invalid", "error");
+      } else {
+        console.log('Loading PDF from File object, name:', file.name, 'size:', file.size);
+        setRenderError(null);
+        setPdfFile(file);
+      }
     }
   }, [file]);
 
   const [pdfFile, setPdfFile] = useState<File | null>(null);
-  const { pdf, error: pdfError } = usePDFDocument(pdfFile);
-  const { page, error: pageError } = usePDFPage(pdf, currentPage, scale);
+  const { pdf, error: pdfError, isLoading: isPdfLoading } = usePDFDocument(pdfFile);
+  const { page, error: pageError, isLoading: isPageLoading } = usePDFPage(pdf, currentPage, scale);
 
   // Log PDF info once it's loaded
   useEffect(() => {
     if (pdf) {
       console.log(`PDF loaded: ${pdf.numPages} pages`);
+      setIsViewerReady(true);
+    } else {
+      setIsViewerReady(false);
     }
   }, [pdf]);
 
@@ -142,6 +193,7 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
   useEffect(() => {
     if (pdfError) {
       console.error('PDF document error:', pdfError);
+      setRenderError(pdfError);
       showToast(`Failed to load PDF document: ${pdfError.message}`, "error");
     }
     
@@ -151,134 +203,146 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
     }
   }, [pdfError, pageError, currentPage]);
 
-  // Modify the useEffect that handles PDF page rendering to include render task tracking
-  useEffect(() => {
-    if (!page || !canvasRef.current) return;
-
+  const renderPdfPage = useCallback(() => {
+    if (!page || !canvasRef.current) {
+      console.log('Cannot render: page or canvas not ready');
+      return false;
+    }
+    
     // Cancel any in-progress rendering
     if (renderTaskRef.current) {
+      console.log('Cancelling existing render task');
       renderTaskRef.current.cancel();
       renderTaskRef.current = null;
     }
+    
+    // Clear any pending timeouts
+    if (renderTimeoutRef.current) {
+      clearTimeout(renderTimeoutRef.current);
+      renderTimeoutRef.current = null;
+    }
 
     setIsRendering(true);
-    console.log('Starting render for page', currentPage, 'with scale', scale);
+    setRenderError(null);
+    console.log('Starting render for page', currentPage, 'with scale', scale, '(attempt:', renderAttempts + 1, ')');
     
     // Use the current scale with a slight boost to ensure crisp rendering
     const renderScale = scale * 1.1; // Slight increase in scale for better rendering
     const viewport = page.getViewport({ scale: renderScale });
     const canvas = canvasRef.current;
+    
+    // Check if canvas dimensions are valid
+    if (viewport.width <= 0 || viewport.height <= 0) {
+      const error = new Error(`Invalid viewport dimensions: ${viewport.width}x${viewport.height}`);
+      console.error(error);
+      setRenderError(error);
+      setIsRendering(false);
+      return false;
+    }
+    
     const context = canvas.getContext("2d", { alpha: false, willReadFrequently: true });
     if (!context) {
-      console.error("Failed to get canvas context");
-      return;
+      const error = new Error("Failed to get canvas context");
+      console.error(error);
+      setRenderError(error);
+      setIsRendering(false);
+      return false;
     }
 
-    // Clear canvas and set correct dimensions with a margin to prevent clipping
-    canvas.width = Math.ceil(viewport.width);
-    canvas.height = Math.ceil(viewport.height);
-    canvas.style.width = `${Math.ceil(viewport.width / 1.1)}px`; // Adjust back for display
-    canvas.style.height = `${Math.ceil(viewport.height / 1.1)}px`; // Adjust back for display
-    
-    // Set white background
-    context.fillStyle = "#FFFFFF";
-    context.fillRect(0, 0, canvas.width, canvas.height);
-
-    const renderContext = {
-      canvasContext: context,
-      viewport: viewport,
-      intent: 'display',
-    };
-
-    // Store the render task reference
-    const renderTask = page.render(renderContext);
-    renderTaskRef.current = renderTask;
-
-    renderTask.promise
-      .then(() => {
-        console.log('Render completed for page', currentPage);
-        setIsRendering(false);
-        renderTaskRef.current = null;
-      })
-      .catch((error) => {
-        if (error.message.includes('cancelled')) {
-          console.log('Render operation was cancelled');
-        } else {
-          console.error("Error rendering PDF page:", error);
-        }
-        setIsRendering(false);
-        renderTaskRef.current = null;
-      });
+    try {
+      // Clear canvas and set correct dimensions with a margin to prevent clipping
+      canvas.width = Math.ceil(viewport.width);
+      canvas.height = Math.ceil(viewport.height);
+      canvas.style.width = `${Math.ceil(viewport.width / 1.1)}px`; // Adjust back for display
+      canvas.style.height = `${Math.ceil(viewport.height / 1.1)}px`; // Adjust back for display
       
+      // Set white background
+      context.fillStyle = "#FFFFFF";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+
+      const renderContext = {
+        canvasContext: context,
+        viewport: viewport,
+        intent: 'display',
+      };
+
+      // Store the render task reference
+      const renderTask = page.render(renderContext);
+      renderTaskRef.current = renderTask;
+
+      renderTask.promise
+        .then(() => {
+          console.log('Render completed for page', currentPage);
+          setIsRendering(false);
+          setRenderAttempts(0); // Reset attempts counter on success
+          renderTaskRef.current = null;
+          setRenderError(null);
+        })
+        .catch((error) => {
+          if (error.message.includes('cancelled')) {
+            console.log('Render operation was cancelled');
+          } else {
+            console.error("Error rendering PDF page:", error);
+            setRenderError(error);
+            
+            // Auto-retry up to 3 times with increasing delays
+            if (renderAttempts < 3) {
+              const retryDelay = Math.pow(2, renderAttempts) * 500; // Exponential backoff
+              console.log(`Retrying render in ${retryDelay}ms (attempt ${renderAttempts + 1}/3)`);
+              
+              renderTimeoutRef.current = setTimeout(() => {
+                setRenderAttempts(prev => prev + 1);
+                renderPdfPage();
+              }, retryDelay);
+            } else {
+              showToast("Failed to render PDF after multiple attempts. Try refreshing the page.", "error");
+            }
+          }
+          setIsRendering(false);
+          renderTaskRef.current = null;
+        });
+      
+      return true;
+    } catch (error) {
+      console.error("Exception during render setup:", error);
+      setRenderError(error instanceof Error ? error : new Error('Failed to set up render'));
+      setIsRendering(false);
+      return false;
+    }
+  }, [page, scale, currentPage, renderAttempts]);
+
+  // Modify the useEffect that handles PDF page rendering
+  useEffect(() => {
+    renderPdfPage();
+    // Return cleanup function if needed
     return () => {
       if (renderTaskRef.current) {
         renderTaskRef.current.cancel();
         renderTaskRef.current = null;
       }
     };
-  }, [page, scale, currentPage]);
+  }, [renderPdfPage]);
 
   // Add debouncing for resize handling
   useEffect(() => {
     const updateDimensions = () => {
-      if (containerRef.current && page) {
-        setContainerWidth(containerRef.current.clientWidth);
-        setContainerHeight(containerRef.current.clientHeight);
+      if (containerRef.current) {
+        const newWidth = containerRef.current.clientWidth;
+        const newHeight = containerRef.current.clientHeight;
+        
+        // Only update if dimensions have actually changed
+        if (newWidth !== containerWidth || newHeight !== containerHeight) {
+          setContainerWidth(newWidth);
+          setContainerHeight(newHeight);
+          console.log(`Container dimensions updated: ${newWidth}x${newHeight}`);
+        }
       }
     };
     
     // Debounced render function to avoid multiple rapid renders
     const debouncedRender = () => {
-      if (!page || !canvasRef.current || isRendering) return;
-      
-      // Cancel any in-progress rendering
-      if (renderTaskRef.current) {
-        renderTaskRef.current.cancel();
-        renderTaskRef.current = null;
-      }
-      
-      setIsRendering(true);
-      
-      // Get viewport with enhanced scale for better quality
-      const renderScale = scale * 1.1;
-      const viewport = page.getViewport({ scale: renderScale });
-      const canvas = canvasRef.current;
-      const ctx = canvas.getContext('2d', { alpha: false, willReadFrequently: true });
-      if (!ctx) return;
-      
-      // Clear and set dimensions with proper rounding to avoid fractional pixels
-      canvas.width = Math.ceil(viewport.width);
-      canvas.height = Math.ceil(viewport.height);
-      canvas.style.width = `${Math.ceil(viewport.width / 1.1)}px`;
-      canvas.style.height = `${Math.ceil(viewport.height / 1.1)}px`;
-      
-      // Set white background
-      ctx.fillStyle = "#FFFFFF";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      
-      // Start a new render operation with improved settings
-      const renderTask = page.render({
-        canvasContext: ctx,
-        viewport,
-        intent: 'display',
-      });
-      
-      renderTaskRef.current = renderTask;
-      
-      renderTask.promise
-        .then(() => {
-          setIsRendering(false);
-          renderTaskRef.current = null;
-        })
-        .catch((error) => {
-          if (error.message.includes('cancelled')) {
-            console.log('Render operation was cancelled');
-          } else {
-            console.error("Error re-rendering PDF page:", error);
-          }
-          setIsRendering(false);
-          renderTaskRef.current = null;
-        });
+      if (isRendering || !page || !canvasRef.current) return;
+      renderPdfPage();
     };
 
     // Immediately update dimensions
@@ -303,8 +367,14 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
         renderTaskRef.current.cancel();
         renderTaskRef.current = null;
       }
+      
+      // Clean up any retry timeouts
+      if (renderTimeoutRef.current) {
+        clearTimeout(renderTimeoutRef.current);
+        renderTimeoutRef.current = null;
+      }
     };
-  }, [page, scale, isRendering]);
+  }, [page, renderPdfPage, isRendering, containerWidth, containerHeight]);
 
   // Add keyboard shortcuts with documentId and current page
   useKeyboardShortcuts(documentId, currentPage);
@@ -332,6 +402,123 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
     container.style.cursor = cursorMap[currentTool] || "default";
   }, [currentTool]);
 
+  // Add function to fit the PDF to the container width
+  const fitToWidth = useCallback(() => {
+    if (!page || !containerRef.current || isRendering) return;
+    
+    // Get the original viewport to determine the PDF's native dimensions
+    const originalViewport = page.getViewport({ scale: 1.0 });
+    
+    // Calculate the scale needed to fit the width
+    const containerWidth = containerRef.current.clientWidth;
+    
+    // Dynamic padding based on container size to ensure content isn't flush against edges
+    const padding = Math.max(40, containerWidth * 0.05); // 5% of container width or at least 40px
+    const targetWidth = containerWidth - padding;
+    
+    // Calculate new scale with constraints to avoid extreme scaling
+    let newScale = targetWidth / originalViewport.width;
+    
+    // Ensure scale is within reasonable bounds for readability
+    newScale = Math.max(0.5, Math.min(newScale, 2.0));
+    
+    console.log('Fitting PDF to width. Container:', containerWidth, 'Scale:', newScale.toFixed(2));
+    
+    setScale(newScale);
+    return newScale;
+  }, [page, isRendering]);
+
+  // Add an effect to measure container dimensions when mounted
+  useEffect(() => {
+    if (containerRef.current) {
+      const updateDimensions = () => {
+        setContainerWidth(containerRef.current?.clientWidth || 0);
+        setContainerHeight(containerRef.current?.clientHeight || 0);
+      };
+      
+      updateDimensions();
+      
+      // Also update dimensions when window is resized
+      window.addEventListener('resize', updateDimensions);
+      return () => window.removeEventListener('resize', updateDimensions);
+    }
+  }, []);
+
+  // Auto-fit when PDF page is loaded
+  useEffect(() => {
+    if (page && containerRef.current && containerWidth > 0 && !autoFitApplied) {
+      // Short delay to ensure the container has been properly measured
+      const timer = setTimeout(() => {
+        fitToWidth();
+        setAutoFitApplied(true);
+        console.log('Auto-fitted PDF to width on load');
+      }, 100);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [page, containerRef, containerWidth, fitToWidth, autoFitApplied]);
+
+  // Reset auto-fit flag when PDF changes
+  useEffect(() => {
+    if (pdfFile) {
+      setAutoFitApplied(false);
+      setRenderAttempts(0);
+      console.log('New PDF loaded, will auto-fit when ready');
+    }
+  }, [pdfFile]);
+
+  // Function to handle manual retry of rendering
+  const handleRetryRender = useCallback(() => {
+    setRenderAttempts(0);
+    setRenderError(null);
+    
+    // For URL-based PDFs, we might need to reload the file
+    if (typeof file === "string") {
+      console.log("Reloading PDF from URL");
+      
+      // Create a new URL object with a cache-busting parameter
+      const timestamp = Date.now();
+      const url = file.includes('?') 
+        ? `${file}&cacheBust=${timestamp}` 
+        : `${file}?cacheBust=${timestamp}`;
+        
+      // Load the PDF again with cache-busting
+      const loadPdfFromUrl = async () => {
+        try {
+          setIsRendering(true);
+          const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+              'Content-Type': 'application/pdf',
+              'Cache-Control': 'no-cache, no-store, must-revalidate',
+            },
+            mode: 'cors',
+          });
+          
+          if (!response.ok) {
+            throw new Error(`Failed to fetch PDF: ${response.status} ${response.statusText}`);
+          }
+          
+          const blob = await response.blob();
+          const fileName = url.split('/').pop()?.split('?')[0] || "document.pdf";
+          const newFile = new File([blob], fileName, { type: "application/pdf" });
+          setPdfFile(newFile);
+        } catch (error) {
+          console.error("Failed to reload PDF:", error);
+          setRenderError(error instanceof Error ? error : new Error(`Failed to reload PDF: ${error}`));
+          showToast(`Failed to reload PDF: ${(error as Error).message}`, "error");
+        } finally {
+          setIsRendering(false);
+        }
+      };
+      
+      loadPdfFromUrl();
+    } else {
+      // For File objects, just try rendering again
+      renderPdfPage();
+    }
+  }, [file, renderPdfPage]);
+
   const exportAllPages = async () => {
     if (!pdf) return;
     
@@ -351,17 +538,17 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
         renderTaskRef.current = null;
       }
       
+      // Store the current visible scale for consistent export
+      const currentViewScale = scale;
+      console.log(`Exporting PDF with scale: ${currentViewScale.toFixed(2)}`);
+      
       // Get the first page to determine original dimensions
       const firstPage = await pdf.getPage(1);
       const originalViewport = firstPage.getViewport({ scale: 1.0 });
       
       // Determine whether this is a text-heavy PDF 
       const isTextBased = await isTextBasedPDF(pdf);
-      showToast(
-        `Detected ${isTextBased ? "text-based" : "graphics-based"} document. Optimizing export...`, 
-        "success"
-      );
-
+      
       // Use original PDF dimensions and format for better quality
       const { jsPDF } = await import("jspdf");
       const doc = new jsPDF({
@@ -387,11 +574,14 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
       // Get document annotations
       const documentAnnotations = store.documents[documentId]?.annotations || [];
 
-      // Use a higher rendering scale for better quality of complex shapes
-      const renderScale = isTextBased ? 2.5 : 4.0; // Increased scale for better quality
+      // Use the same scale as currently displayed in the viewer for consistent results
+      // Just slightly higher resolution for better quality output
+      const renderScale = currentViewScale * 1.2;
       
       // Process pages in smaller batches to manage memory better
-      const BATCH_SIZE = isTextBased ? 3 : 2; // Reduced batch size due to higher scale
+      const BATCH_SIZE = 2;
+      
+      showToast("Rendering PDF exactly as shown in the viewer...", "success");
       
       for (let batchStart = 1; batchStart <= totalPages; batchStart += BATCH_SIZE) {
         const batchEnd = Math.min(batchStart + BATCH_SIZE - 1, totalPages);
@@ -405,7 +595,7 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
             const tempCanvas = document.createElement("canvas");
             const page = await pdf.getPage(pageNum);
             
-            // Use an appropriate scale for quality rendering
+            // Use the same viewport calculation as the viewer
             const viewport = page.getViewport({ scale: renderScale });
             tempCanvas.width = viewport.width;
             tempCanvas.height = viewport.height;
@@ -415,11 +605,11 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
             ctx.fillStyle = "white";
             ctx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
 
-            // Render PDF page with high quality settings
+            // Render PDF page
             await page.render({
               canvasContext: ctx,
               viewport,
-              intent: "display" // Use display intent for better color accuracy
+              intent: "display"
             }).promise;
 
             // Filter annotations for this page
@@ -427,104 +617,51 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
               (a: any) => a.pageNumber === pageNum
             );
             
-            // Draw annotations in three passes to ensure correct layering
-            // First pass: Draw highlights with proper blending
-            const highlightAnnotations = pageAnnotations.filter(
-              (a: any) => a.type === 'highlight'
-            );
-            
-            if (highlightAnnotations.length > 0) {
-              ctx.save();
-              // Use a blend mode that works well for highlights
-              ctx.globalCompositeOperation = 'multiply';
-              
-              highlightAnnotations.forEach((annotation: any) => {
-                try {
-                  // Draw highlights with special handling
-                  const enhancedHighlight = {
-                    ...annotation,
-                    style: {
-                      ...annotation.style,
-                      opacity: Math.min(0.4, annotation.style.opacity) // Consistent highlight opacity
-                    }
-                  };
-                  drawAnnotation(ctx, enhancedHighlight, renderScale);
-                } catch (drawError) {
-                  console.error("Error drawing highlight annotation:", drawError);
-                }
-              });
-              
-              ctx.restore();
-            }
-            
-            // Second pass: Draw regular annotations
-            const regularAnnotations = pageAnnotations.filter(
-              (a: any) => a.type !== 'highlight' && 
-                           !['triangle', 'star', 'door', 'window', 'fireExit', 'stairs', 'elevator', 'toilet'].includes(a.type)
-            );
-            
-            regularAnnotations.forEach((annotation: any) => {
+            // Draw annotations with standard method (same as viewer)
+            pageAnnotations.forEach((annotation: any) => {
               try {
                 drawAnnotation(ctx, annotation, renderScale);
               } catch (drawError) {
-                console.error(`Error drawing annotation type ${annotation.type}:`, drawError);
+                console.error(`Error drawing annotation:`, drawError);
               }
             });
-            
-            // Third pass: Draw complex shapes with enhanced visibility
-            const complexShapeAnnotations = pageAnnotations.filter(
-              (a: any) => ['triangle', 'star', 'door', 'window', 'fireExit', 'stairs', 'elevator', 'toilet'].includes(a.type)
-            );
-            
-            if (complexShapeAnnotations.length > 0) {
-              ctx.save();
-              complexShapeAnnotations.forEach((annotation: any) => {
-                try {
-                  drawAnnotationWithEnhancedVisibility(ctx, annotation, renderScale);
-                } catch (drawError) {
-                  console.error(`Error drawing complex shape ${annotation.type}:`, drawError);
-                }
-              });
-              ctx.restore();
-            }
 
             // Add page to PDF (first page is added automatically)
             if (pageNum > 1) {
               doc.addPage([originalViewport.width, originalViewport.height]);
             }
 
-            // Always use PNG for better shape quality
-            const imgFormat = "PNG"; 
-            const imgQuality = 1.0;
+            // Use PNG format for better quality
+            const imgData = tempCanvas.toDataURL("image/png", 1.0);
             
-            // Convert canvas to image data with high quality
-            const imgData = tempCanvas.toDataURL(`image/${imgFormat.toLowerCase()}`, imgQuality);
+            // Calculate proper scaling ratio to maintain the view ratio
+            const scaleRatio = originalViewport.width / viewport.width;
+            const scaledHeight = viewport.height * scaleRatio;
             
-            // Add image to PDF, matching the page dimensions
+            // Center the content if needed
+            const yOffset = Math.max(0, (originalViewport.height - scaledHeight) / 2);
+            
+            // Add image to PDF
             doc.addImage(
               imgData,
-              imgFormat,
+              "PNG",
               0,
-              0,
+              yOffset,
               originalViewport.width,
-              originalViewport.height,
-              undefined, // No alias
-              'FAST' // Use fast compression
+              scaledHeight,
+              undefined,
+              'FAST'
             );
 
-            // Update progress and clean up
+            // Clean up resources
             processedPages++;
-            
-            // Clean up resources to prevent memory leaks
             page.cleanup();
-            
-            // Allow canvas to be garbage collected
             tempCanvas.width = 0;
             tempCanvas.height = 0;
             
           } catch (pageError) {
             console.error(`Error processing page ${pageNum}:`, pageError);
-            showToast(`Error on page ${pageNum}. Continuing with other pages...`, "error");
+            showToast(`Error on page ${pageNum}. Continuing...`, "error");
           }
         }
         
@@ -594,7 +731,7 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
   
   const handleZoomReset = () => {
     if (isRendering || isExporting) return;
-    setScale(1);
+    setScale(1.0); // Reset to 100%
   };
   
   const handleNextPage = () => {
@@ -691,19 +828,56 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
     }
   }, [documentId]);
 
+  // Render error state
+  if (renderError && !isRendering && renderAttempts >= 3) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full p-4">
+        <div className="text-red-500 font-medium mb-2 flex items-center">
+          <AlertTriangle className="mr-2" size={20} />
+          Failed to render PDF
+        </div>
+        <div className="text-gray-700 text-sm mb-4 max-w-md text-center">
+          {renderError.message || "The PDF could not be displayed. This might be due to network issues or a corrupted file."}
+        </div>
+        <button 
+          className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 flex items-center"
+          onClick={handleRetryRender}
+        >
+          <RefreshCw className="mr-2" size={16} />
+          Retry Loading PDF
+        </button>
+      </div>
+    );
+  }
+
+  // Error state for PDF document or page loading errors
   if (pdfError || pageError) {
     return (
       <div className="flex flex-col items-center justify-center h-full p-4">
-        <div className="text-red-500 font-medium mb-2">Error loading PDF</div>
-        <div className="text-gray-700 text-sm mb-4">
-          {pdfError?.message || pageError?.message || "Unknown error occurred"}
+        <div className="text-red-500 font-medium mb-2 flex items-center">
+          <AlertTriangle className="mr-2" size={20} />
+          Error loading PDF
+        </div>
+        <div className="text-gray-700 text-sm mb-4 max-w-md text-center">
+          {pdfError?.message || pageError?.message || "Unknown error occurred while loading the PDF document."}
         </div>
         <button 
-          className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+          className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 flex items-center"
           onClick={() => window.location.reload()}
         >
+          <RefreshCw className="mr-2" size={16} />
           Reload Page
         </button>
+      </div>
+    );
+  }
+
+  // Loading state
+  if (isPdfLoading || isPageLoading || (isRendering && !page)) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full">
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500 mb-4"></div>
+        <p className="text-gray-700">Loading PDF document...</p>
       </div>
     );
   }
@@ -711,7 +885,9 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
   if (!pdf || !page) {
     return (
       <div className="flex items-center justify-center h-full">
-        {/* Loading indicator removed as requested */}
+        <div className="text-gray-500 text-center p-4">
+          {pdfFile ? "Preparing PDF viewer..." : "No PDF document loaded"}
+        </div>
       </div>
     );
   }
@@ -719,154 +895,88 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
   const viewport = page.getViewport({ scale });
 
   return (
-    <>
-      <div className="pdf-container-fixed" ref={containerRef}>
-        {/* Controls Bar - Fixed size regardless of zoom */}
-        <div className="flex items-center justify-between p-2 border-b bg-white zoom-invariant">
-          <div className="flex items-center gap-4">
-            {/* Page Controls */}
-            <button
-              onClick={handlePrevPage}
-              className="p-1 rounded hover:bg-gray-100"
-              disabled={currentPage === 1}
-              title="Previous Page"
-            >
-              <ChevronLeft className="text-gray-700" size={20} />
-            </button>
-            <span className="text-sm font-medium text-gray-700">
-              Page {currentPage} of {pdf?.numPages || 0}
-            </span>
-            <button
-              onClick={handleNextPage}
-              className="p-1 rounded hover:bg-gray-100"
-              disabled={currentPage === pdf?.numPages || false}
-              title="Next Page"
-            >
-              <ChevronRight className="text-gray-700" size={20} />
-            </button>
-
-            {/* Divider */}
-            <div className="h-6 w-px bg-gray-200" />
-
-            {/* Zoom Controls */}
-            <div className="flex items-center gap-2">
-              <button
-                onClick={handleZoomOut}
-                className="p-1 rounded hover:bg-gray-100"
-                title="Zoom Out"
-              >
-                <svg
-                  className="w-5 h-5"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M20 12H4"
-                  />
-                </svg>
-              </button>
-              <span className="text-sm font-medium w-16 text-center">
-                {Math.round(scale * 100)}%
-              </span>
-              <button
-                onClick={handleZoomIn}
-                className="p-1 rounded hover:bg-gray-100"
-                title="Zoom In"
-              >
-                <svg
-                  className="w-5 h-5"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M12 4v16m8-8H4"
-                  />
-                </svg>
-              </button>
-              <button
-                onClick={handleZoomReset}
-                className="px-2 py-1 text-sm text-gray-600 hover:bg-gray-100 rounded"
-              >
-                Reset
-              </button>
-            </div>
-            
-            {/* Divider */}
-            <div className="h-6 w-px bg-gray-200" />
-            
-            {/* Download Button */}
-            <button
-              onClick={exportAllPages}
-              className="flex items-center gap-1 px-2 py-1 text-sm text-gray-700 hover:bg-gray-100 rounded"
-              title="Download Annotated PDF"
-              disabled={isExporting}
-            >
-              <Download size={18} />
-              <span>{isExporting ? "Exporting..." : "Download PDF"}</span>
-            </button>
-          </div>
-        </div>
-
+    <div className="relative flex flex-col h-full">
+      {isShortcutGuideOpen && (
+        <KeyboardShortcutGuide
+          onClose={() => setIsShortcutGuideOpen(false)}
+        />
+      )}
+      {pdf && (
+        <PDFControls
+          currentPage={currentPage}
+          totalPages={pdf.numPages}
+          scale={scale}
+          isExporting={isExporting}
+          isImporting={importStatus.loading}
+          importError={importStatus.error}
+          onPrevPage={handlePrevPage}
+          onNextPage={handleNextPage}
+          onZoomIn={handleZoomIn}
+          onZoomOut={handleZoomOut}
+          onZoomReset={handleZoomReset}
+          onFitToWidth={fitToWidth}
+          onExportCurrentPage={handleExportCurrentPage}
+          onExportAllPages={exportAllPages}
+          onExportAnnotations={handleExportAnnotations}
+          onImportAnnotations={handleImportAnnotations}
+        />
+      )}
+      
+      <div className="pdf-container-fixed h-full flex-1 overflow-hidden" ref={containerRef}>
         {/* PDF Viewer - Fixed container with scrollable content */}
-        <div className="pdf-content-scrollable bg-gray-100 p-4">
-          {isRendering && (
-            <div className="text-center mb-2 text-blue-600 text-sm font-medium bg-blue-50 py-1 px-2 rounded zoom-invariant">
-              Rendering page {currentPage}...
-            </div>
-          )}
-          
-          <div
-            className="pdf-canvas-wrapper"
+        <div className="relative flex-1 overflow-auto bg-gray-100 p-2 md:p-4">
+          <div 
+            className="pdf-viewer-container mx-auto"
             style={{
-              maxWidth: 'none', // Remove max-width constraint to prevent clipping
-              margin: '0 auto',
-              overflow: 'visible' // Ensure content isn't clipped
+              width: page ? `${viewport.width}px` : `${containerWidth}px`,
+              height: page ? `${viewport.height}px` : `${containerHeight}px`,
+              position: 'relative',
+              maxWidth: '100%',
+              opacity: isRendering ? 0.7 : 1, // Show slight fade during rendering
+              transition: 'opacity 0.2s ease-in-out',
             }}
           >
-            {/* Use a wrapper div with padding to ensure margins are visible */}
-            <div
-              style={{
-                width: viewport.width + 'px',
-                height: viewport.height + 'px',
-                position: 'relative',
-                padding: '1px', // Tiny padding to prevent edge clipping
-                margin: '10px' // Add margin to ensure content isn't cut off
-              }}
-            >
-              {/* Base PDF Canvas */}
-              <canvas
-                ref={canvasRef}
-                className="absolute top-0 left-0"
-                width={viewport.width}
-                height={viewport.height}
-                style={{
-                  width: viewport.width + 'px',
-                  height: viewport.height + 'px',
-                }}
-              />
-              {/* Annotation Canvas */}
-              <AnnotationCanvas
-                documentId={documentId}
-                pageNumber={currentPage}
-                scale={scale}
-                width={viewport.width}
-                height={viewport.height}
-              />
-            </div>
+            {page && (
+              <>
+                <canvas
+                  ref={canvasRef}
+                  className="absolute top-0 left-0 z-10"
+                  style={{
+                    margin: '0 auto',
+                  }}
+                />
+                {/* Only render annotation canvas when the PDF is ready */}
+                {isViewerReady && (
+                  <AnnotationCanvas
+                    documentId={documentId}
+                    pageNumber={currentPage}
+                    scale={scale}
+                    width={viewport.width}
+                    height={viewport.height}
+                  />
+                )}
+              </>
+            )}
+            
+            {/* Rendering indicator - more subtle than the full screen loader */}
+            {isRendering && page && (
+              <div className="absolute top-2 right-2 bg-white bg-opacity-80 rounded-full p-1 z-50 shadow-md">
+                <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-blue-500"></div>
+              </div>
+            )}
+            
+            {isExporting && (
+              <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                <div className="bg-white p-4 rounded-lg shadow-lg">
+                  <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-blue-500 mx-auto"></div>
+                  <p className="text-center mt-4">Processing PDF...</p>
+                  <p className="text-center text-sm text-gray-500">This may take a few minutes for large documents.</p>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
-      {isShortcutGuideOpen && (
-        <KeyboardShortcutGuide onClose={() => setIsShortcutGuideOpen(false)} />
-      )}
-    </>
+    </div>
   );
 };
