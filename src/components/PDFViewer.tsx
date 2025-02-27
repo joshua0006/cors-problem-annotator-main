@@ -412,21 +412,53 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
     // Calculate the scale needed to fit the width
     const containerWidth = containerRef.current.clientWidth;
     
-    // Dynamic padding based on container size to ensure content isn't flush against edges
-    const padding = Math.max(40, containerWidth * 0.05); // 5% of container width or at least 40px
+    // Increased padding to ensure content isn't cropped at edges
+    // Using a larger minimum padding of 60px instead of 40px
+    const padding = Math.max(60, containerWidth * 0.08); // 8% of container width or at least 60px
     const targetWidth = containerWidth - padding;
     
     // Calculate new scale with constraints to avoid extreme scaling
     let newScale = targetWidth / originalViewport.width;
     
     // Ensure scale is within reasonable bounds for readability
-    newScale = Math.max(0.5, Math.min(newScale, 2.0));
+    // Increased minimum scale from 0.5 to 0.6 for better visibility
+    newScale = Math.max(0.6, Math.min(newScale, 2.0));
     
     console.log('Fitting PDF to width. Container:', containerWidth, 'Scale:', newScale.toFixed(2));
     
     setScale(newScale);
     return newScale;
   }, [page, isRendering]);
+
+  // Function to center the document in the viewport
+  const scrollToCenterDocument = useCallback(() => {
+    if (!containerRef.current || !page) return;
+    
+    const container = containerRef.current.querySelector('.overflow-auto');
+    if (container) {
+      // Get container dimensions
+      const containerRect = container.getBoundingClientRect();
+      
+      // Get content dimensions
+      const content = container.querySelector('.pdf-viewer-container');
+      if (content) {
+        const contentRect = content.getBoundingClientRect();
+        
+        // Calculate center positions
+        const scrollToX = (contentRect.width - containerRect.width) / 2;
+        const scrollToY = (contentRect.height - containerRect.height) / 2;
+        
+        // Scroll container to center the content
+        container.scrollTo({
+          left: Math.max(0, scrollToX),
+          top: Math.max(0, scrollToY),
+          behavior: 'smooth'
+        });
+        
+        console.log('Centered document in view');
+      }
+    }
+  }, [page]);
 
   // Add an effect to measure container dimensions when mounted
   useEffect(() => {
@@ -451,12 +483,19 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
       const timer = setTimeout(() => {
         fitToWidth();
         setAutoFitApplied(true);
+        
+        // Add additional delay before centering to let render complete
+        setTimeout(() => {
+          scrollToCenterDocument();
+          console.log('Auto-centered PDF after fit-to-width');
+        }, 300);
+        
         console.log('Auto-fitted PDF to width on load');
-      }, 100);
+      }, 200); // Increased delay from 100ms to 200ms for more reliable sizing
       
       return () => clearTimeout(timer);
     }
-  }, [page, containerRef, containerWidth, fitToWidth, autoFitApplied]);
+  }, [page, containerRef, containerWidth, fitToWidth, autoFitApplied, scrollToCenterDocument]);
 
   // Reset auto-fit flag when PDF changes
   useEffect(() => {
@@ -932,6 +971,7 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
               height: page ? `${viewport.height}px` : `${containerHeight}px`,
               position: 'relative',
               maxWidth: '100%',
+              marginBottom: '20px', // Add bottom margin to ensure visibility
               opacity: isRendering ? 0.7 : 1, // Show slight fade during rendering
               transition: 'opacity 0.2s ease-in-out',
             }}
@@ -963,6 +1003,21 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
               <div className="absolute top-2 right-2 bg-white bg-opacity-80 rounded-full p-1 z-50 shadow-md">
                 <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-blue-500"></div>
               </div>
+            )}
+            
+            {/* Center content button */}
+            {page && (
+              <button 
+                onClick={scrollToCenterDocument}
+                className="absolute bottom-2 right-2 bg-white bg-opacity-80 rounded-full p-2 z-50 shadow-md hover:bg-opacity-100"
+                title="Center Document in View"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10"></circle>
+                  <line x1="12" y1="8" x2="12" y2="16"></line>
+                  <line x1="8" y1="12" x2="16" y2="12"></line>
+                </svg>
+              </button>
             )}
             
             {isExporting && (

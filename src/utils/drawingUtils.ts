@@ -1,4 +1,4 @@
-import { Annotation, Point } from "../types/annotation";
+import { Annotation, Point, StampType } from "../types/annotation";
 
 // Helper function to validate points
 export const isValidPoint = (point: Point | undefined): point is Point => {
@@ -15,21 +15,33 @@ export const isValidPoint = (point: Point | undefined): point is Point => {
 export const drawCircle = (
   ctx: CanvasRenderingContext2D,
   points: Point[],
-  scale: number
+  scale: number,
+  diameterMode: boolean = false
 ) => {
   if (!points || points.length < 2) return;
   const [start, end] = points;
 
   if (!isValidPoint(start) || !isValidPoint(end)) return;
 
-  // Calculate radius using scaled coordinates
-  const radius = Math.sqrt(
-    Math.pow((end.x - start.x) * scale, 2) + Math.pow((end.y - start.y) * scale, 2)
-  ) / 2;
+  let centerX, centerY, radius;
 
-  // Calculate center with scaling applied
-  const centerX = (start.x + end.x) / 2 * scale;
-  const centerY = (start.y + end.y) / 2 * scale;
+  if (diameterMode) {
+    // In diameter mode, center is midpoint between two points
+    centerX = (start.x + end.x) / 2 * scale;
+    centerY = (start.y + end.y) / 2 * scale;
+    // Calculate radius as half the distance between points
+    radius = Math.sqrt(
+      Math.pow((end.x - start.x) * scale, 2) + Math.pow((end.y - start.y) * scale, 2)
+    ) / 2;
+  } else {
+    // In center-radius mode, first point is center
+    centerX = start.x * scale;
+    centerY = start.y * scale;
+    // Calculate radius as the distance between points
+    radius = Math.sqrt(
+      Math.pow((end.x - start.x) * scale, 2) + Math.pow((end.y - start.y) * scale, 2)
+    );
+  }
 
   ctx.beginPath();
   ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
@@ -355,7 +367,7 @@ export const drawStickyNote = (
   const fontSize = 14 * scale;
   const lineHeight = 20 * scale;
   const lines = style.text.split("\n");
-  const noteHeight = lines.length * lineHeight + padding * 2;
+  const noteHeight = Math.max(100 * scale, lines.length * lineHeight + padding * 2);
 
   // Calculate scaled position
   const x = start.x * scale;
@@ -365,23 +377,47 @@ export const drawStickyNote = (
   ctx.save();
 
   // Draw note background
-  ctx.fillStyle = "#FFEB3B";
-  ctx.globalAlpha = 0.8;
-  ctx.fillRect(x, y, noteWidth, noteHeight);
-
-  // Draw note border
-  ctx.strokeStyle = "#FBC02D";
-  ctx.lineWidth = 1 * scale;
-  ctx.strokeRect(x, y, noteWidth, noteHeight);
+  ctx.fillStyle = "#FFEB3B"; // Yellow sticky note color
+  ctx.globalAlpha = 0.8; // Slightly transparent
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.2)';
+  ctx.shadowBlur = 5 * scale;
+  ctx.shadowOffsetX = 2 * scale;
+  ctx.shadowOffsetY = 2 * scale;
+  
+  // Draw rounded rectangle
+  const radius = 4 * scale;
+  ctx.beginPath();
+  ctx.moveTo(x + radius, y);
+  ctx.lineTo(x + noteWidth - radius, y);
+  ctx.quadraticCurveTo(x + noteWidth, y, x + noteWidth, y + radius);
+  ctx.lineTo(x + noteWidth, y + noteHeight - radius);
+  ctx.quadraticCurveTo(x + noteWidth, y + noteHeight, x + noteWidth - radius, y + noteHeight);
+  ctx.lineTo(x + radius, y + noteHeight);
+  ctx.quadraticCurveTo(x, y + noteHeight, x, y + noteHeight - radius);
+  ctx.lineTo(x, y + radius);
+  ctx.quadraticCurveTo(x, y, x + radius, y);
+  ctx.closePath();
+  ctx.fill();
+  
+  // Reset shadow and opacity for text
+  ctx.shadowColor = 'transparent';
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetX = 0;
+  ctx.shadowOffsetY = 0;
+  ctx.globalAlpha = 1;
 
   // Draw text
+  ctx.fillStyle = "#000000"; // Black text on yellow background
   ctx.font = `${fontSize}px Arial`;
-  ctx.fillStyle = "#000000";
-  ctx.globalAlpha = style.opacity;
   ctx.textBaseline = "top";
 
+  // Draw each line of text
   lines.forEach((line, index) => {
-    ctx.fillText(line, x + padding, y + padding + index * lineHeight);
+    ctx.fillText(
+      line,
+      x + padding,
+      y + padding + index * lineHeight
+    );
   });
 
   // Restore context state
@@ -424,28 +460,47 @@ export const drawHighlight = (
   ctx.strokeStyle = style.color || "#FFFF00"; // Add a stroke in the same color
   ctx.lineWidth = 1 * scale; // Thin border for definition
 
-  // Draw highlight as a filled path
-  ctx.beginPath();
-  points.forEach((point, index) => {
-    if (!isValidPoint(point)) return;
+  // For rectangle-like highlights with 2 points
+  if (points.length === 2) {
+    const [start, end] = points;
+    
+    // Calculate rectangle coordinates
+    const x = Math.min(start.x, end.x) * scale;
+    const y = Math.min(start.y, end.y) * scale;
+    const width = Math.abs(end.x - start.x) * scale;
+    const height = Math.abs(end.y - start.y) * scale;
+    
+    // Draw as a rectangle (more efficient and easier to resize)
+    ctx.beginPath();
+    ctx.rect(x, y, width, height);
+    ctx.fill();
+    ctx.stroke();
+  } 
+  // For polygon highlights with more points
+  else {
+    // Draw highlight as a filled path
+    ctx.beginPath();
+    points.forEach((point, index) => {
+      if (!isValidPoint(point)) return;
 
-    if (index === 0) {
-      ctx.moveTo(point.x * scale, point.y * scale);
-    } else {
-      ctx.lineTo(point.x * scale, point.y * scale);
+      if (index === 0) {
+        ctx.moveTo(point.x * scale, point.y * scale);
+      } else {
+        ctx.lineTo(point.x * scale, point.y * scale);
+      }
+    });
+
+    // Close the path if it's not closed
+    if (points.length > 2) {
+      ctx.closePath();
     }
-  });
-
-  // Close the path if it's not closed
-  if (points.length > 2) {
-    ctx.closePath();
+    
+    // Fill with semi-transparent color
+    ctx.fill();
+    
+    // Add a subtle stroke for better visibility
+    ctx.stroke();
   }
-  
-  // Fill with semi-transparent color
-  ctx.fill();
-  
-  // Add a subtle stroke for better visibility
-  ctx.stroke();
 
   // Restore context state
   ctx.restore();
@@ -544,23 +599,8 @@ export const drawAnnotation = (
     case "circle":
       // Support circleDiameterMode from the style property
       const diameterMode = annotation.style.circleDiameterMode as boolean || false;
-      if (diameterMode && annotation.points.length === 2) {
-        // Use a different approach for diameter mode
-        const [p1, p2] = annotation.points;
-        // Calculate midpoint as the center
-        const centerX = (p1.x + p2.x) / 2 * scale;
-        const centerY = (p1.y + p2.y) / 2 * scale;
-        // Calculate radius as half the distance between points
-        const radius = Math.sqrt(
-          Math.pow((p2.x - p1.x) * scale, 2) + Math.pow((p2.y - p1.y) * scale, 2)
-        ) / 2;
-        
-        ctx.beginPath();
-        ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
-      } else {
-        // Use the standard center-radius approach
-        drawCircle(ctx, annotation.points, scale);
-      }
+      // Pass the diameterMode to the drawCircle function
+      drawCircle(ctx, annotation.points, scale, diameterMode);
       break;
     case "arrow":
     case "doubleArrow":
@@ -580,13 +620,13 @@ export const drawAnnotation = (
     case "star":
       drawStar(ctx, annotation.points, scale);
       break;
-    case "noSymbol":
+    case "noSymbol" as any:
       drawNoSymbol(ctx, annotation.points, scale);
       break;
-    case "tick":
+    case "tick" as any:
       drawTick(ctx, annotation.points, scale);
       break;
-    case "cross":
+    case "cross" as any:
       drawCross(ctx, annotation.points, scale);
       break;
     case "text":
@@ -629,92 +669,161 @@ export const isPointInHighlight = (
   annotation: Annotation,
   scale: number = 1
 ): boolean => {
-  if (!annotation.points || annotation.points.length < 3) return false;
-
-  let inside = false;
-  const scaledPoint = { x: point.x * scale, y: point.y * scale };
-
-  for (
-    let i = 0, j = annotation.points.length - 1;
-    i < annotation.points.length;
-    j = i++
-  ) {
-    const pi = annotation.points[i];
-    const pj = annotation.points[j];
-
-    const xi = pi.x * scale;
-    const yi = pi.y * scale;
-    const xj = pj.x * scale;
-    const yj = pj.y * scale;
-
-    const intersect =
-      yi > scaledPoint.y !== yj > scaledPoint.y &&
-      scaledPoint.x < ((xj - xi) * (scaledPoint.y - yi)) / (yj - yi) + xi;
-
-    if (intersect) inside = !inside;
+  if (annotation.type !== "highlight") return false;
+  
+  const { points } = annotation;
+  if (!points || points.length < 2) return false;
+  
+  // For rectangle-like highlights with 2 points (most common case)
+  if (points.length === 2) {
+    const [start, end] = points;
+    
+    // Calculate rectangle bounds
+    const left = Math.min(start.x, end.x);
+    const top = Math.min(start.y, end.y);
+    const right = Math.max(start.x, end.x);
+    const bottom = Math.max(start.y, end.y);
+    
+    // Check if point is inside the rectangle with a slightly larger hit area for better UX
+    const padding = 4 / scale; // 4px padding for easier selection
+    
+    return (
+      point.x >= left - padding &&
+      point.x <= right + padding &&
+      point.y >= top - padding &&
+      point.y <= bottom + padding
+    );
   }
-
-  return inside;
+  
+  // For polygon highlights with more points
+  // Use point-in-polygon algorithm for complex shapes
+  let isInside = false;
+  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+    const xi = points[i].x;
+    const yi = points[i].y;
+    const xj = points[j].x;
+    const yj = points[j].y;
+    
+    const intersect = ((yi > point.y) !== (yj > point.y)) &&
+      (point.x < (xj - xi) * (point.y - yi) / (yj - yi) + xi);
+      
+    if (intersect) isInside = !isInside;
+  }
+  
+  return isInside;
 };
 
 // Add new function to draw resize handles
 export const drawResizeHandles = (
   ctx: CanvasRenderingContext2D,
   annotation: Annotation,
-  scale: number
+  scale: number,
+  isHighlight: boolean = false
 ): void => {
-  if (!annotation.points || !annotation.points.length) return;
+  if (!annotation.points || annotation.points.length < 2) return;
 
-  const handleSize = 8;
+  // Skip resize handles for certain types
+  if (["freehand", "stamp"].includes(annotation.type)) return;
+
   ctx.save();
-
-  // Set handle styles
-  ctx.fillStyle = "#ffffff";
-  ctx.strokeStyle = "#0000ff";
-  ctx.lineWidth = 1;
-
-  // Calculate bounds
-  const [start, end] = annotation.points;
-  const bounds = {
-    left: Math.min(start.x, end.x) * scale,
-    right: Math.max(start.x, end.x) * scale,
-    top: Math.min(start.y, end.y) * scale,
-    bottom: Math.max(start.y, end.y) * scale,
-  };
-
-  // Draw selection rectangle
-  ctx.strokeStyle = "#0000ff";
-  ctx.strokeRect(
-    bounds.left - handleSize / 2,
-    bounds.top - handleSize / 2,
-    bounds.right - bounds.left + handleSize,
-    bounds.bottom - bounds.top + handleSize
-  );
-
-  // Draw handles
-  const handles = [
-    { x: bounds.left, y: bounds.top }, // Top-left
-    { x: bounds.right, y: bounds.top }, // Top-right
-    { x: bounds.left, y: bounds.bottom }, // Bottom-left
-    { x: bounds.right, y: bounds.bottom }, // Bottom-right
-    { x: (bounds.left + bounds.right) / 2, y: bounds.top }, // Top-middle
-    { x: (bounds.left + bounds.right) / 2, y: bounds.bottom }, // Bottom-middle
-    { x: bounds.left, y: (bounds.top + bounds.bottom) / 2 }, // Left-middle
-    { x: bounds.right, y: (bounds.top + bounds.bottom) / 2 }, // Right-middle
-  ];
-
-  // Draw handles
-  handles.forEach((handle) => {
-    ctx.beginPath();
-    ctx.rect(
-      handle.x - handleSize / 2,
-      handle.y - handleSize / 2,
-      handleSize,
-      handleSize
-    );
-    ctx.fill();
-    ctx.stroke();
-  });
+  ctx.setLineDash([]);
+  
+  const handleSize = isHighlight ? 7 : 5; // Larger handles for highlights
+  const handleColor = isHighlight ? "#2563eb" : "#3b82f6"; // More visible color for highlights
+  
+  // Special handling for circles
+  if (annotation.type === "circle") {
+    const [p1, p2] = annotation.points;
+    const diameterMode = annotation.style.circleDiameterMode as boolean || false;
+    
+    let centerX, centerY, radius;
+    
+    if (diameterMode) {
+      // In diameter mode, center is midpoint between two points
+      centerX = (p1.x + p2.x) / 2;
+      centerY = (p1.y + p2.y) / 2;
+      radius = Math.sqrt(
+        Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2)
+      ) / 2;
+    } else {
+      // In center-radius mode, first point is center
+      centerX = p1.x;
+      centerY = p1.y;
+      radius = Math.sqrt(
+        Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2)
+      );
+    }
+    
+    // Create handles on the major cardinal points
+    const handlePoints = [
+      { x: centerX + radius, y: centerY }, // right
+      { x: centerX - radius, y: centerY }, // left
+      { x: centerX, y: centerY + radius }, // bottom
+      { x: centerX, y: centerY - radius }, // top
+      { x: centerX + radius * Math.cos(Math.PI / 4), y: centerY + radius * Math.sin(Math.PI / 4) }, // bottom right
+      { x: centerX + radius * Math.cos(Math.PI * 3 / 4), y: centerY + radius * Math.sin(Math.PI * 3 / 4) }, // bottom left
+      { x: centerX + radius * Math.cos(Math.PI * 5 / 4), y: centerY + radius * Math.sin(Math.PI * 5 / 4) }, // top left
+      { x: centerX + radius * Math.cos(Math.PI * 7 / 4), y: centerY + radius * Math.sin(Math.PI * 7 / 4) }  // top right
+    ];
+    
+    // Draw the handles
+    handlePoints.forEach((point) => {
+      ctx.fillStyle = "white";
+      ctx.strokeStyle = handleColor;
+      ctx.lineWidth = 1.5 * scale;
+      
+      // Draw handle square
+      ctx.beginPath();
+      ctx.rect(
+        point.x * scale - (handleSize / 2),
+        point.y * scale - (handleSize / 2),
+        handleSize,
+        handleSize
+      );
+      ctx.fill();
+      ctx.stroke();
+    });
+  } else {
+    // Original code for handling other shapes
+    const bounds = getShapeBounds(annotation.points);
+    const cornerPoints = [
+      { x: bounds.left, y: bounds.top }, // top-left
+      { x: bounds.right, y: bounds.top }, // top-right
+      { x: bounds.left, y: bounds.bottom }, // bottom-left
+      { x: bounds.right, y: bounds.bottom }, // bottom-right
+    ];
+    
+    // Add middle points for non-line shapes
+    if (
+      !["line", "arrow", "doubleArrow"].includes(annotation.type) ||
+      annotation.type === "highlight"
+    ) {
+      cornerPoints.push(
+        { x: (bounds.left + bounds.right) / 2, y: bounds.top }, // top
+        { x: bounds.right, y: (bounds.top + bounds.bottom) / 2 }, // right
+        { x: (bounds.left + bounds.right) / 2, y: bounds.bottom }, // bottom
+        { x: bounds.left, y: (bounds.top + bounds.bottom) / 2 } // left
+      );
+    }
+  
+    // Draw the handles
+    cornerPoints.forEach((point) => {
+      ctx.fillStyle = "white";
+      ctx.strokeStyle = handleColor;
+      ctx.lineWidth = isHighlight ? 2 * scale : 1.5 * scale;
+      
+      // Draw handle square
+      ctx.beginPath();
+      ctx.rect(
+        point.x * scale - (handleSize / 2),
+        point.y * scale - (handleSize / 2),
+        handleSize,
+        handleSize
+      );
+      ctx.fill();
+      ctx.stroke();
+    });
+  }
 
   ctx.restore();
 };
@@ -838,23 +947,106 @@ export const drawSelectionOutline = (
   scale: number,
   isMultiSelect: boolean = false
 ) => {
-  const bounds = getShapeBounds(annotation.points);
-  const padding = 4 * scale; // Scale padding
+  if (!annotation.points || annotation.points.length < 1) return;
 
   ctx.save();
-  ctx.strokeStyle = isMultiSelect ? "#2563eb" : "#3b82f6";
-  ctx.lineWidth = 1 * scale; // Scale outline width
-  ctx.setLineDash(isMultiSelect ? [4 * scale, 4 * scale] : []); // Scale dash pattern
-
-  // Draw scaled selection rectangle
-  ctx.strokeRect(
-    bounds.left * scale - padding,
-    bounds.top * scale - padding,
-    (bounds.right - bounds.left) * scale + padding * 2,
-    (bounds.bottom - bounds.top) * scale + padding * 2
-  );
-
-  if (!isMultiSelect) {
+  
+  // Use a blue color for selection outline
+  ctx.strokeStyle = isMultiSelect ? "#4299e1" : "#2563eb";
+  ctx.lineWidth = 1.5 * scale;
+  ctx.setLineDash([4 * scale, 3 * scale]);
+  
+  const { type } = annotation;
+  let bounds;
+  
+  if (type === "highlight") {
+    // For highlights, use a more visible selection rectangle
+    bounds = getShapeBounds(annotation.points);
+    ctx.beginPath();
+    ctx.rect(
+      bounds.left * scale - 1,
+      bounds.top * scale - 1,
+      (bounds.right - bounds.left) * scale + 2,
+      (bounds.bottom - bounds.top) * scale + 2
+    );
+    ctx.stroke();
+    
+    // Draw more visible resize handles for highlights
+    drawResizeHandles(ctx, annotation, scale, true);
+  } else {
+    // For other shapes, follow their natural contour
+    ctx.beginPath();
+    
+    // For simple shapes with 2 points
+    if (annotation.points.length === 2) {
+      const [start, end] = annotation.points;
+      // Type-specific outlines
+      if (type === "rectangle") {
+        ctx.rect(
+          start.x * scale,
+          start.y * scale,
+          (end.x - start.x) * scale,
+          (end.y - start.y) * scale
+        );
+      } else if (type === "line" || type === "arrow" || type === "doubleArrow") {
+        ctx.moveTo(start.x * scale, start.y * scale);
+        ctx.lineTo(end.x * scale, end.y * scale);
+      } else if (type === "circle") {
+        // Get the circle parameters based on the drawing mode
+        const diameterMode = annotation.style.circleDiameterMode as boolean || false;
+        let centerX, centerY, radius;
+        
+        if (diameterMode) {
+          // In diameter mode, center is midpoint between two points
+          centerX = (start.x + end.x) / 2 * scale;
+          centerY = (start.y + end.y) / 2 * scale;
+          radius = Math.sqrt(
+            Math.pow((end.x - start.x) * scale, 2) +
+            Math.pow((end.y - start.y) * scale, 2)
+          ) / 2;
+        } else {
+          // In center-radius mode, first point is center
+          centerX = start.x * scale;
+          centerY = start.y * scale;
+          radius = Math.sqrt(
+            Math.pow((end.x - start.x) * scale, 2) +
+            Math.pow((end.y - start.y) * scale, 2)
+          );
+        }
+        
+        ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
+      } else {
+        // Generic outline for two-point shapes
+        bounds = getShapeBounds(annotation.points);
+        ctx.rect(
+          bounds.left * scale,
+          bounds.top * scale,
+          (bounds.right - bounds.left) * scale,
+          (bounds.bottom - bounds.top) * scale
+        );
+      }
+    } 
+    // For shapes with more points
+    else {
+      annotation.points.forEach((point, index) => {
+        if (index === 0) {
+          ctx.moveTo(point.x * scale, point.y * scale);
+        } else {
+          ctx.lineTo(point.x * scale, point.y * scale);
+        }
+      });
+      
+      // Close the path for area shapes
+      if (
+        ["polygon", "triangle", "star", "freehand", "highlight"].includes(type)
+      ) {
+        ctx.closePath();
+      }
+    }
+    
+    ctx.stroke();
+    
+    // Draw resize handles for the shape
     drawResizeHandles(ctx, annotation, scale);
   }
 

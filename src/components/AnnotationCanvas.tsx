@@ -31,6 +31,13 @@ interface AnnotationCanvasProps {
   onPaste?: (pageNumber: number) => void;
 }
 
+// Add this interface for handling freehand drawing
+interface FreehandDrawingState {
+  isActive: boolean;
+  points: Point[];
+  lastPoint: Point | null;
+}
+
 export const AnnotationCanvas: React.FC<AnnotationCanvasProps> = ({
   documentId,
   pageNumber,
@@ -63,6 +70,11 @@ export const AnnotationCanvas: React.FC<AnnotationCanvasProps> = ({
   const [contextMenu, setContextMenu] = useState<{
     position: Point;
   } | null>(null);
+  const [freehandState, setFreehandState] = useState<FreehandDrawingState>({
+    isActive: false,
+    points: [],
+    lastPoint: null,
+  });
 
   const store = useAnnotationStore();
   const { currentTool, currentStyle, currentDrawMode } = store;
@@ -140,6 +152,37 @@ export const AnnotationCanvas: React.FC<AnnotationCanvasProps> = ({
       return isPointInStamp(point, annotation);
     } else if (annotation.type === "highlight") {
       return isPointInHighlight(point, annotation);
+    } else if (annotation.type === "circle") {
+      // Special handling for circles
+      const [p1, p2] = annotation.points;
+      const diameterMode = annotation.style.circleDiameterMode as boolean || false;
+      
+      let centerX, centerY, radius;
+      
+      if (diameterMode) {
+        // In diameter mode, center is midpoint between two points
+        centerX = (p1.x + p2.x) / 2;
+        centerY = (p1.y + p2.y) / 2;
+        radius = Math.sqrt(
+          Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2)
+        ) / 2;
+      } else {
+        // In center-radius mode, first point is center
+        centerX = p1.x;
+        centerY = p1.y;
+        radius = Math.sqrt(
+          Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2)
+        );
+      }
+      
+      // Calculate distance from point to center
+      const distance = Math.sqrt(
+        Math.pow(point.x - centerX, 2) + Math.pow(point.y - centerY, 2)
+      );
+      
+      // Add a small padding for easier selection
+      const padding = 5 / scale;
+      return distance <= radius + padding;
     }
 
     // Get bounds based on shape type
@@ -155,11 +198,153 @@ export const AnnotationCanvas: React.FC<AnnotationCanvasProps> = ({
     );
   };
 
+  // Add handleFreehandDrawing function
+  const handleFreehandDrawing = (event: React.MouseEvent, eventType: 'down' | 'move' | 'up' | 'leave') => {
+    if (currentTool !== "freehand") return;
+    
+    const point = getCanvasPoint(event);
+    
+    switch (eventType) {
+      case 'down':
+        // Start drawing
+        setFreehandState({
+          isActive: true,
+          points: [point],
+          lastPoint: point
+        });
+        break;
+        
+      case 'move':
+        // Continue drawing if active
+        if (freehandState.isActive && freehandState.lastPoint) {
+          // Add new point to the path
+          setFreehandState(prev => ({
+            ...prev,
+            points: [...prev.points, point],
+            lastPoint: point
+          }));
+          
+          // Render the updated path
+          renderFreehandPath();
+        }
+        break;
+        
+      case 'up':
+      case 'leave':
+        // Complete drawing
+        if (freehandState.isActive && freehandState.points.length >= 2) {
+          // Create and save the freehand annotation
+          const newAnnotation: Annotation = {
+            id: Date.now().toString(),
+            type: "freehand",
+            points: freehandState.points,
+            style: currentStyle,
+            pageNumber,
+            timestamp: Date.now(),
+            userId: "current-user",
+          };
+          
+          store.addAnnotation(documentId, newAnnotation);
+          
+          // Reset freehand state
+          setFreehandState({
+            isActive: false,
+            points: [],
+            lastPoint: null
+          });
+        }
+        break;
+    }
+  };
+  
+  // Add function to render freehand path while drawing
+  const renderFreehandPath = () => {
+    const canvas = canvasRef.current;
+    if (!canvas || !freehandState.isActive || freehandState.points.length < 2) return;
+    
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    
+    render(); // First render existing content
+    
+    // Draw the current freehand path
+    ctx.save();
+    ctx.strokeStyle = currentStyle.color;
+    ctx.lineWidth = currentStyle.lineWidth * scale;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.globalAlpha = currentStyle.opacity;
+    
+    ctx.beginPath();
+    ctx.moveTo(freehandState.points[0].x * scale, freehandState.points[0].y * scale);
+    
+    for (let i = 1; i < freehandState.points.length; i++) {
+      ctx.lineTo(freehandState.points[i].x * scale, freehandState.points[i].y * scale);
+    }
+    
+    ctx.stroke();
+    ctx.restore();
+  };
+
+  // Add dedicated function for handling text annotations
+  const createTextTool = (point: Point) => {
+    // Convert point to scaled coordinates for text input
+    const scaledPoint = {
+      x: point.x,
+      y: point.y,
+    };
+    
+    // Set text input position and enable editing
+    setTextInputPosition(scaledPoint);
+    setIsEditingText(true);
+    setEditingAnnotation(null); // Ensure we're creating, not editing
+    setIsDrawing(false); // Ensure drawing mode is off
+  };
+
+  // Add dedicated function for handling sticky note annotations
+  const createStickyNoteTool = (point: Point) => {
+    // Convert point to scaled coordinates for sticky note input
+    const scaledPoint = {
+      x: point.x,
+      y: point.y,
+    };
+    
+    // Set text input position and enable editing with sticky note flag
+    setTextInputPosition(scaledPoint);
+    setIsEditingText(true);
+    setEditingAnnotation(null); // Ensure we're creating, not editing
+    setIsDrawing(false); // Ensure drawing mode is off
+  };
+
+  // Add dedicated function for text and sticky note editing
+  const handleTextEdit = (annotation: Annotation) => {
+    if (annotation.type !== "text" && annotation.type !== "stickyNote") return;
+    
+    setEditingAnnotation(annotation);
+    setTextInputPosition(annotation.points[0]);
+    setIsEditingText(true);
+  };
+
   const handleMouseDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return;
+    
+    // Handle freehand tool separately
+    if (currentTool === "freehand") {
+      handleFreehandDrawing(e, 'down');
+      return;
+    }
+    
     const point = getCanvasPoint(e);
 
     if (currentTool === "select") {
+      // Start potential selection box
+      if (!(e.shiftKey || e.ctrlKey || e.metaKey) && 
+          !documentState.annotations.some(a => 
+            a.pageNumber === pageNumber && isPointInAnnotation(point, a))) {
+        setSelectionBox({ start: point, end: point });
+        return;
+      }
+      
       // Check if clicking on any selected annotation first
       const clickedSelectedAnnotation = selectedAnnotations.find((annotation) =>
         isPointInAnnotation(point, annotation)
@@ -187,8 +372,8 @@ export const AnnotationCanvas: React.FC<AnnotationCanvasProps> = ({
       );
 
       if (clickedAnnotation) {
-        if (e.shiftKey) {
-          // Add to selection if shift is held
+        if (e.shiftKey || e.ctrlKey || e.metaKey) {
+          // Add to selection if modifier key is held
           const isAlreadySelected = selectedAnnotations.some(
             (a) => a.id === clickedAnnotation.id
           );
@@ -200,22 +385,19 @@ export const AnnotationCanvas: React.FC<AnnotationCanvasProps> = ({
             setSelectedAnnotations([...selectedAnnotations, clickedAnnotation]);
           }
         } else {
-          // Replace selection if shift is not held
+          // Replace selection if modifier key is not held
           setSelectedAnnotations([clickedAnnotation]);
         }
-      } else {
-        // Clear selection if clicking empty space
+      } else if (!(e.shiftKey || e.ctrlKey || e.metaKey)) {
+        // Clear selection if clicking empty space without modifier key
         setSelectedAnnotations([]);
       }
-    } else if (currentTool === "text" || currentTool === "stickyNote") {
-      // Convert point to scaled coordinates for text input
-      const scaledPoint = {
-        x: point.x,
-        y: point.y,
-      };
-      setTextInputPosition(scaledPoint);
-      setIsEditingText(true);
-      setIsDrawing(false); // Ensure drawing mode is off
+    } else if (currentTool === "text") {
+      // Use dedicated text tool function
+      createTextTool(point);
+    } else if (currentTool === "stickyNote") {
+      // Use dedicated sticky note tool function
+      createStickyNoteTool(point);
     } else {
       setIsDrawing(true);
       lastPointRef.current = point;
@@ -231,12 +413,18 @@ export const AnnotationCanvas: React.FC<AnnotationCanvasProps> = ({
   const handleMouseMove = (e: React.MouseEvent) => {
     const point = getCanvasPoint(e);
 
+    // Handle freehand tool separately
+    if (currentTool === "freehand" && freehandState.isActive) {
+      handleFreehandDrawing(e, 'move');
+      return;
+    }
+    
     if (selectionBox) {
       // Update selection box end point
       setSelectionBox((prev) => (prev ? { ...prev, end: point } : null));
 
       // Find annotations within selection box
-      const annotations = documentState.annotations.filter((annotation) => {
+      const selectedAnnotationsInBox = documentState.annotations.filter((annotation) => {
         if (annotation.pageNumber !== pageNumber) return false;
         return isAnnotationInSelectionBox(
           annotation,
@@ -245,8 +433,21 @@ export const AnnotationCanvas: React.FC<AnnotationCanvasProps> = ({
         );
       });
 
-      // Update selected annotations
-      store.selectAnnotations(annotations);
+      // If modifier key is held, add to existing selection
+      if (e.shiftKey || e.ctrlKey || e.metaKey) {
+        const existingIds = new Set(selectedAnnotations.map(a => a.id));
+        const newAnnotations = selectedAnnotationsInBox.filter(a => !existingIds.has(a.id));
+        
+        if (newAnnotations.length > 0) {
+          setSelectedAnnotations([...selectedAnnotations, ...newAnnotations]);
+        }
+      } else {
+        // Replace selection if not holding modifier key
+        setSelectedAnnotations(selectedAnnotationsInBox);
+      }
+      
+      // Force render to display selection box
+      render();
       return;
     }
 
@@ -263,7 +464,9 @@ export const AnnotationCanvas: React.FC<AnnotationCanvasProps> = ({
           annotation.points,
           activeHandle!,
           point,
-          e.shiftKey
+          e.shiftKey,
+          10, // minSize
+          annotation // Pass the annotation for type-specific handling
         );
 
         const updatedAnnotation = {
@@ -359,6 +562,35 @@ export const AnnotationCanvas: React.FC<AnnotationCanvasProps> = ({
   const handleMouseUp = (e: React.MouseEvent) => {
     if (e.button !== 0) return;
 
+    // Handle freehand tool separately
+    if (currentTool === "freehand" && freehandState.isActive) {
+      handleFreehandDrawing(e, 'up');
+      return;
+    }
+    
+    const point = getCanvasPoint(e);
+    
+    // Handle selection box completion
+    if (selectionBox) {
+      // Only clear the selection box if it's very small (likely a click vs. drag)
+      const dx = Math.abs(selectionBox.end.x - selectionBox.start.x);
+      const dy = Math.abs(selectionBox.end.y - selectionBox.start.y);
+      
+      // Keep the selection result but clear the visual selection box
+      setSelectionBox(null);
+      
+      // If the selection box was very small, treat as a click (which is handled in mouseDown)
+      if (dx < 3 / scale && dy < 3 / scale) {
+        // Don't clear selection if modifier key is held
+        if (!(e.shiftKey || e.ctrlKey || e.metaKey)) {
+          setSelectedAnnotations([]);
+        }
+      }
+      
+      render();
+      return;
+    }
+
     if (isDrawing && currentPoints.length === 2) {
       const [start, end] = currentPoints;
 
@@ -419,10 +651,16 @@ export const AnnotationCanvas: React.FC<AnnotationCanvasProps> = ({
     render();
   };
 
-  const handleMouseLeave = () => {
+  const handleMouseLeave = (e: React.MouseEvent) => {
+    // Handle freehand tool separately
+    if (currentTool === "freehand" && freehandState.isActive) {
+      handleFreehandDrawing(e, 'leave');
+      return;
+    }
+    
     if (isDrawing && currentTool === "freehand" && currentPoints.length >= 2) {
-      // Save the drawing if we have points
-      // For freehand drawings, we just use the raw points since there's no smoothPoints function
+      // This old freehand logic can be removed since we now have a dedicated handler
+      // But I'll keep it for backward compatibility
       const newAnnotation: Annotation = {
         id: Date.now().toString(),
         type: "freehand",
@@ -444,25 +682,14 @@ export const AnnotationCanvas: React.FC<AnnotationCanvasProps> = ({
     setActiveHandle(null);
     setSelectionBox(null);
     setIsResizing(false);
-  };
-
-  const handleDoubleClick = (e: React.MouseEvent) => {
-    if (currentTool !== "select") return;
-
-    const point = getCanvasPoint(e);
-    const clickedAnnotation = [...documentState.annotations]
-      .reverse()
-      .find(
-        (annotation) =>
-          annotation.pageNumber === pageNumber &&
-          (annotation.type === "text" || annotation.type === "stickyNote") &&
-          isPointInAnnotation(point, annotation)
-      );
-
-    if (clickedAnnotation) {
-      setEditingAnnotation(clickedAnnotation);
-      setTextInputPosition(clickedAnnotation.points[0]);
-      setIsEditingText(true);
+    
+    // Also clean up freehand state if active
+    if (freehandState.isActive) {
+      setFreehandState({
+        isActive: false,
+        points: [],
+        lastPoint: null
+      });
     }
   };
 
@@ -472,29 +699,45 @@ export const AnnotationCanvas: React.FC<AnnotationCanvasProps> = ({
       return;
     }
 
+    let updatedOrNewAnnotation: Annotation | null = null;
+
     if (editingAnnotation) {
       // Update existing annotation
-      const updatedAnnotation = {
+      updatedOrNewAnnotation = {
         ...editingAnnotation,
         style: { ...editingAnnotation.style, text },
       };
-      store.updateAnnotation(documentId, updatedAnnotation);
+      store.updateAnnotation(documentId, updatedOrNewAnnotation);
     } else if (textInputPosition) {
+      // Determine the annotation type based on the current tool
+      const annotationType = currentTool === "stickyNote" ? "stickyNote" : "text";
+      
       // Create new annotation
-      const newAnnotation: Annotation = {
+      updatedOrNewAnnotation = {
         id: Date.now().toString(),
-        type: currentTool as "text" | "stickyNote",
+        type: annotationType,
         points: [textInputPosition], // Use unscaled position
         style: {
           ...currentStyle,
           text,
-          color: currentTool === "stickyNote" ? "#000000" : currentStyle.color,
+          // For sticky notes, set a yellow background color
+          color: annotationType === "stickyNote" ? "#FFEB3B" : currentStyle.color,
         },
         pageNumber,
         timestamp: Date.now(),
         userId: "current-user",
       };
-      store.addAnnotation(documentId, newAnnotation);
+      
+      // Add the annotation to the store
+      store.addAnnotation(documentId, updatedOrNewAnnotation);
+      
+      // Switch to select tool after creating text/sticky note
+      store.setCurrentTool("select");
+    }
+
+    // Select the newly created or updated annotation
+    if (updatedOrNewAnnotation) {
+      setSelectedAnnotations([updatedOrNewAnnotation]);
     }
 
     // Clean up
@@ -509,12 +752,13 @@ export const AnnotationCanvas: React.FC<AnnotationCanvasProps> = ({
     setEditingAnnotation(null);
   };
 
+  // Improved isAnnotationInSelectionBox function with better handling for different annotation types
   const isAnnotationInSelectionBox = (
     annotation: Annotation,
     start: Point,
     end: Point
   ): boolean => {
-    const bounds = getShapeBounds(annotation.points);
+    // Get the selection box bounds
     const selectionBounds = {
       left: Math.min(start.x, end.x),
       right: Math.max(start.x, end.x),
@@ -522,7 +766,16 @@ export const AnnotationCanvas: React.FC<AnnotationCanvasProps> = ({
       bottom: Math.max(start.y, end.y),
     };
 
-    // For text and sticky notes, use center point
+    // If selection box has no area, no selection
+    if (selectionBounds.left === selectionBounds.right || 
+        selectionBounds.top === selectionBounds.bottom) {
+      return false;
+    }
+
+    // Get annotation bounds
+    const bounds = getShapeBounds(annotation.points);
+    
+    // For small objects like points or text, use center-based selection
     if (annotation.type === "text" || annotation.type === "stickyNote") {
       const center = {
         x: bounds.left + (bounds.right - bounds.left) / 2,
@@ -535,90 +788,65 @@ export const AnnotationCanvas: React.FC<AnnotationCanvasProps> = ({
         center.y <= selectionBounds.bottom
       );
     }
-
-    // For stamps, require full containment
-    if (annotation.type === "stamp") {
-      return (
-        bounds.left >= selectionBounds.left &&
-        bounds.right <= selectionBounds.right &&
-        bounds.top >= selectionBounds.top &&
-        bounds.bottom <= selectionBounds.bottom
+    
+    // For circle annotations, check center and radius
+    if (annotation.type === "circle") {
+      const [p1, p2] = annotation.points;
+      const diameterMode = annotation.style.circleDiameterMode as boolean || false;
+      
+      let centerX, centerY, radius;
+      
+      if (diameterMode) {
+        // In diameter mode, center is midpoint between two points
+        centerX = (p1.x + p2.x) / 2;
+        centerY = (p1.y + p2.y) / 2;
+        radius = Math.sqrt(
+          Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2)
+        ) / 2;
+      } else {
+        // In center-radius mode, first point is center
+        centerX = p1.x;
+        centerY = p1.y;
+        radius = Math.sqrt(
+          Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2)
+        );
+      }
+      
+      // Create a bounding box for the circle
+      const circleBounds = {
+        left: centerX - radius,
+        right: centerX + radius,
+        top: centerY - radius,
+        bottom: centerY + radius,
+      };
+      
+      // Check if the circle intersects with the selection box
+      return !(
+        circleBounds.right < selectionBounds.left ||
+        circleBounds.left > selectionBounds.right ||
+        circleBounds.bottom < selectionBounds.top ||
+        circleBounds.top > selectionBounds.bottom
       );
     }
 
-    // For other shapes, check if any corner is inside the selection box
-    // or if the selection box intersects with any edge
-    const corners = [
-      { x: bounds.left, y: bounds.top },
-      { x: bounds.right, y: bounds.top },
-      { x: bounds.left, y: bounds.bottom },
-      { x: bounds.right, y: bounds.bottom },
-    ];
+    // For freehand, check if any point is inside selection box
+    if (annotation.type === "freehand") {
+      return annotation.points.some(
+        (point) =>
+          point.x >= selectionBounds.left &&
+          point.x <= selectionBounds.right &&
+          point.y >= selectionBounds.top &&
+          point.y <= selectionBounds.bottom
+      );
+    }
 
-    // Check if any corner is inside selection box
-    const anyCornerInside = corners.some(
-      (corner) =>
-        corner.x >= selectionBounds.left &&
-        corner.x <= selectionBounds.right &&
-        corner.y >= selectionBounds.top &&
-        corner.y <= selectionBounds.bottom
+    // For regular shapes like rectangles, check for intersection with selection box
+    return !(
+      bounds.right < selectionBounds.left ||
+      bounds.left > selectionBounds.right ||
+      bounds.bottom < selectionBounds.top ||
+      bounds.top > selectionBounds.bottom
     );
-
-    if (anyCornerInside) return true;
-
-    // Check for intersection with selection box edges
-    const edges = [
-      [corners[0], corners[1]], // Top
-      [corners[1], corners[3]], // Right
-      [corners[2], corners[3]], // Bottom
-      [corners[0], corners[2]], // Left
-    ];
-
-    const selectionEdges = [
-      [
-        { x: selectionBounds.left, y: selectionBounds.top },
-        { x: selectionBounds.right, y: selectionBounds.top },
-      ],
-      [
-        { x: selectionBounds.right, y: selectionBounds.top },
-        { x: selectionBounds.right, y: selectionBounds.bottom },
-      ],
-      [
-        { x: selectionBounds.left, y: selectionBounds.bottom },
-        { x: selectionBounds.right, y: selectionBounds.bottom },
-      ],
-      [
-        { x: selectionBounds.left, y: selectionBounds.top },
-        { x: selectionBounds.left, y: selectionBounds.bottom },
-      ],
-    ];
-
-    return edges.some((edge) =>
-      selectionEdges.some((selEdge) =>
-        doLinesIntersect(edge[0], edge[1], selEdge[0], selEdge[1])
-      )
-    );
-  };
-
-  // Helper function to check if two line segments intersect
-  const doLinesIntersect = (
-    p1: Point,
-    p2: Point,
-    p3: Point,
-    p4: Point
-  ): boolean => {
-    const denominator =
-      (p4.y - p3.y) * (p2.x - p1.x) - (p4.x - p3.x) * (p2.y - p1.y);
-    if (denominator === 0) return false;
-
-    const ua =
-      ((p4.x - p3.x) * (p1.y - p3.y) - (p4.y - p3.y) * (p1.x - p3.x)) /
-      denominator;
-    const ub =
-      ((p2.x - p1.x) * (p1.y - p3.y) - (p2.y - p1.y) * (p1.x - p3.x)) /
-      denominator;
-
-    return ua >= 0 && ua <= 1 && ub >= 0 && ub <= 1;
   };
 
   const handleContextMenu = (e: React.MouseEvent) => {
@@ -680,8 +908,8 @@ export const AnnotationCanvas: React.FC<AnnotationCanvasProps> = ({
         }
       });
 
-    // Draw preview while drawing
-    if (isDrawing && currentPoints.length > 0) {
+    // Draw preview while drawing (for non-freehand tools)
+    if (isDrawing && currentPoints.length > 0 && currentTool !== "freehand") {
       ctx.save();
       ctx.strokeStyle = currentStyle.color;
       ctx.lineWidth = currentStyle.lineWidth * scale;
@@ -702,19 +930,37 @@ export const AnnotationCanvas: React.FC<AnnotationCanvasProps> = ({
       drawAnnotation(ctx, previewAnnotation, scale);
       ctx.restore();
     }
+    
+    // For freehand, we handle the preview in renderFreehandPath function
 
-    // Draw selection box
+    // Draw selection box with improved styling
     if (selectionBox) {
       ctx.save();
+      
+      // Calculate box dimensions
+      const width = (selectionBox.end.x - selectionBox.start.x) * scale;
+      const height = (selectionBox.end.y - selectionBox.start.y) * scale;
+      
+      // Draw semi-transparent blue fill
+      ctx.fillStyle = "rgba(37, 99, 235, 0.1)";
+      ctx.fillRect(
+        selectionBox.start.x * scale,
+        selectionBox.start.y * scale,
+        width,
+        height
+      );
+      
+      // Draw dashed border
       ctx.strokeStyle = "#2563eb";
-      ctx.lineWidth = 1;
+      ctx.lineWidth = 1.5;
       ctx.setLineDash([4, 4]);
       ctx.strokeRect(
         selectionBox.start.x * scale,
         selectionBox.start.y * scale,
-        (selectionBox.end.x - selectionBox.start.x) * scale,
-        (selectionBox.end.y - selectionBox.start.y) * scale
+        width,
+        height
       );
+      
       ctx.restore();
     }
   };
@@ -787,6 +1033,21 @@ export const AnnotationCanvas: React.FC<AnnotationCanvasProps> = ({
         store.clearSelection();
       }
     }
+    
+    // Handle Escape to clear selection
+    if (e.key === "Escape") {
+      setSelectedAnnotations([]);
+      store.clearSelection();
+    }
+    
+    // Handle Ctrl+A / Cmd+A to select all annotations on the current page
+    if ((e.ctrlKey || e.metaKey) && e.key === "a") {
+      e.preventDefault();
+      const pageAnnotations = documentState.annotations.filter(
+        a => a.pageNumber === pageNumber
+      );
+      setSelectedAnnotations(pageAnnotations);
+    }
   };
 
   // Add useEffect to handle keyboard events
@@ -796,6 +1057,35 @@ export const AnnotationCanvas: React.FC<AnnotationCanvasProps> = ({
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [selectedAnnotations, documentId, isEditingText]);
+
+  // Add useEffect to clean up freehand state when changing tools
+  useEffect(() => {
+    if (currentTool !== "freehand" && freehandState.isActive) {
+      setFreehandState({
+        isActive: false,
+        points: [],
+        lastPoint: null
+      });
+    }
+  }, [currentTool]);
+
+  const handleDoubleClick = (e: React.MouseEvent) => {
+    if (currentTool !== "select") return;
+
+    const point = getCanvasPoint(e);
+    const clickedAnnotation = [...documentState.annotations]
+      .reverse()
+      .find(
+        (annotation) =>
+          annotation.pageNumber === pageNumber &&
+          (annotation.type === "text" || annotation.type === "stickyNote") &&
+          isPointInAnnotation(point, annotation)
+      );
+
+    if (clickedAnnotation) {
+      handleTextEdit(clickedAnnotation);
+    }
+  };
 
   return (
     <>

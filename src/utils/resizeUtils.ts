@@ -86,14 +86,160 @@ export const getResizeHandle = (
   return null;
 };
 
+// Check if resize operation is valid
+export const isValidResize = (
+  annotation: Annotation,
+  handle: ResizeHandle
+): boolean => {
+  // Don't allow resizing for certain annotation types
+  const nonResizableTypes = ["stamp", "freehand"];
+  return !nonResizableTypes.includes(annotation.type);
+};
+
+// Specialized function for resizing circles
+export const getResizedCirclePoints = (
+  originalPoints: Point[],
+  handle: ResizeHandle,
+  currentPoint: Point,
+  isDiameterMode: boolean = false,
+  minSize: number = 10
+): Point[] => {
+  if (originalPoints.length < 2) return originalPoints;
+  
+  const [p1, p2] = originalPoints;
+  
+  // Make a deep copy to avoid modifying the original points
+  const newPoints: Point[] = [
+    { x: p1.x, y: p1.y },
+    { x: p2.x, y: p2.y }
+  ];
+  
+  if (isDiameterMode) {
+    // In diameter mode, both points define the diameter
+    // We need to calculate the center and then resize accordingly
+    const centerX = (p1.x + p2.x) / 2;
+    const centerY = (p1.y + p2.y) / 2;
+    
+    // Calculate new radius based on the handle being dragged
+    let dx = 0;
+    let dy = 0;
+    
+    switch (handle) {
+      case "topLeft":
+      case "top":
+      case "left":
+        // These handles should move the point opposite to the center
+        dx = currentPoint.x - centerX;
+        dy = currentPoint.y - centerY;
+        newPoints[0] = { 
+          x: centerX + dx, 
+          y: centerY + dy 
+        };
+        newPoints[1] = { 
+          x: centerX - dx, 
+          y: centerY - dy 
+        };
+        break;
+        
+      case "topRight":
+      case "right":
+        dx = currentPoint.x - centerX;
+        dy = currentPoint.y - centerY;
+        newPoints[0] = { 
+          x: centerX - dx, 
+          y: centerY + dy 
+        };
+        newPoints[1] = { 
+          x: centerX + dx, 
+          y: centerY - dy 
+        };
+        break;
+        
+      case "bottomLeft":
+      case "bottom":
+        dx = currentPoint.x - centerX;
+        dy = currentPoint.y - centerY;
+        newPoints[0] = { 
+          x: centerX + dx, 
+          y: centerY - dy 
+        };
+        newPoints[1] = { 
+          x: centerX - dx, 
+          y: centerY + dy 
+        };
+        break;
+        
+      case "bottomRight":
+        dx = currentPoint.x - centerX;
+        dy = currentPoint.y - centerY;
+        newPoints[0] = { 
+          x: centerX - dx, 
+          y: centerY - dy 
+        };
+        newPoints[1] = { 
+          x: centerX + dx, 
+          y: centerY + dy 
+        };
+        break;
+        
+      default:
+        return originalPoints;
+    }
+  } else {
+    // In center-radius mode, p1 is the center, p2 is a point on the circumference
+    // We keep the center fixed and only move the point on the circumference
+    
+    // When dragging handles, calculate new position of point on circumference
+    const centerX = p1.x;
+    const centerY = p1.y;
+    
+    // Calculate distance from center to current point
+    const dx = currentPoint.x - centerX;
+    const dy = currentPoint.y - centerY;
+    
+    // Calculate the normalized distance (direction vector)
+    const distance = Math.sqrt(dx * dx + dy * dy);
+    
+    // Ensure minimum circle size
+    if (distance < minSize / 2) {
+      return originalPoints;
+    }
+    
+    // Update the circumference point (p2) based on drag direction
+    newPoints[1] = { 
+      x: centerX + dx, 
+      y: centerY + dy 
+    };
+  }
+  
+  // Calculate the new radius to ensure it meets minimum size
+  const newRadius = Math.sqrt(
+    Math.pow(newPoints[1].x - newPoints[0].x, 2) + 
+    Math.pow(newPoints[1].y - newPoints[0].y, 2)
+  );
+  
+  if (isDiameterMode && newRadius < minSize / 2) {
+    return originalPoints;
+  }
+  
+  return newPoints;
+};
+
 // Calculate new points during resize
 export const getResizedPoints = (
   originalPoints: Point[],
   handle: ResizeHandle,
   currentPoint: Point,
   keepAspectRatio: boolean = false,
-  minSize: number = 10
+  minSize: number = 10,
+  annotation?: Annotation
 ): Point[] => {
+  // Handle circle resizing separately if this is a circle annotation
+  if (annotation && annotation.type === "circle") {
+    const isDiameterMode = annotation.style.circleDiameterMode as boolean || false;
+    return getResizedCirclePoints(originalPoints, handle, currentPoint, isDiameterMode, minSize);
+  }
+
   const bounds = getBounds(originalPoints);
   const width = bounds.right - bounds.left;
   const height = bounds.bottom - bounds.top;
@@ -196,16 +342,6 @@ export const getResizedPoints = (
       y: isFlippedY ? newBounds.top : newBounds.bottom,
     },
   ];
-};
-
-// Check if resize operation is valid
-export const isValidResize = (
-  annotation: Annotation,
-  handle: ResizeHandle
-): boolean => {
-  // Don't allow resizing for certain annotation types
-  const nonResizableTypes = ["stamp", "highlight", "freehand"];
-  return !nonResizableTypes.includes(annotation.type);
 };
 
 // Add helper function to check if point is within resize handle
