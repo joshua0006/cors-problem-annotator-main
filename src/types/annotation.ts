@@ -17,6 +17,9 @@ export type AnnotationType =
   | "stickyNote"
   | "highlight"
   | "stamp"
+  | "stampApproved"
+  | "stampRejected"
+  | "stampRevision"
   | "door"
   | "window"
   | "fireExit"
@@ -24,7 +27,7 @@ export type AnnotationType =
   | "elevator"
   | "toilet";
 
-export type StampType = "approved" | "rejected" | "draft" | "reviewed";
+export type StampType = "approved" | "rejected" | "revision";
 
 export type AnnotationStyle = {
   color: string;
@@ -70,6 +73,9 @@ export const createAnnotation = (type: AnnotationType): Annotation => {
     stickyNote: { color: "#FFD700", lineWidth: 2, opacity: 1 },
     highlight: { color: "#FFFF00", lineWidth: 12, opacity: 0.3 },
     stamp: { color: "#000000", lineWidth: 2, opacity: 1, stampType: "approved" },
+    stampApproved: { color: "#00AA00", lineWidth: 2, opacity: 1, stampType: "approved" },
+    stampRejected: { color: "#FF0000", lineWidth: 2, opacity: 1, stampType: "rejected" },
+    stampRevision: { color: "#0000FF", lineWidth: 2, opacity: 1, stampType: "revision" },
     door: { color: "#000000", lineWidth: 2, opacity: 1 },
     window: { color: "#0000FF", lineWidth: 2, opacity: 1 },
     fireExit: { color: "#FF0000", lineWidth: 2, opacity: 1 },

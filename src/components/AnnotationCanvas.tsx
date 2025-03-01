@@ -398,6 +398,30 @@ export const AnnotationCanvas: React.FC<AnnotationCanvasProps> = ({
     } else if (currentTool === "stickyNote") {
       // Use dedicated sticky note tool function
       createStickyNoteTool(point);
+    } else if (currentTool === "stampApproved" || currentTool === "stampRejected" || currentTool === "stampRevision") {
+      // Create stamp annotation
+      const stampType = getStampTypeFromTool(currentTool);
+      
+      // Create a stamp annotation
+      const annotation = {
+        id: Date.now().toString(),
+        type: "stamp" as AnnotationType,
+        points: [point],
+        style: {
+          ...currentStyle,
+          stampType,
+        },
+        pageNumber,
+        timestamp: Date.now(),
+        userId: "current-user",
+        version: 1,
+      };
+      
+      // Add the annotation to the store
+      store.addAnnotation(documentId, annotation);
+      
+      // Force a render to show the stamp immediately
+      render();
     } else {
       setIsDrawing(true);
       lastPointRef.current = point;
@@ -1084,6 +1108,20 @@ export const AnnotationCanvas: React.FC<AnnotationCanvasProps> = ({
 
     if (clickedAnnotation) {
       handleTextEdit(clickedAnnotation);
+    }
+  };
+
+  // Add a mapping function from tool names to stamp types
+  const getStampTypeFromTool = (tool: string): "approved" | "rejected" | "revision" | undefined => {
+    switch (tool) {
+      case "stampApproved":
+        return "approved";
+      case "stampRejected":
+        return "rejected";
+      case "stampRevision":
+        return "revision";
+      default:
+        return undefined;
     }
   };
 

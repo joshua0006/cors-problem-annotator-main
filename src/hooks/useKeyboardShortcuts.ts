@@ -118,6 +118,15 @@ export const useKeyboardShortcuts = (
       h: {
         action: () => setCurrentTool("highlight"),
       },
+      "1": {
+        action: () => setCurrentTool("stampApproved"),
+      },
+      "2": {
+        action: () => setCurrentTool("stampRejected"),
+      },
+      "3": {
+        action: () => setCurrentTool("stampRevision"),
+      },
       Delete: {
         action: deleteSelectedAnnotations,
       },

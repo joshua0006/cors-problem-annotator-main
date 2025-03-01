@@ -15,7 +15,10 @@ import {
   ArrowUpRight,
   ArrowRightLeft,
   Type,
-  StickyNote
+  StickyNote,
+  CheckCircle2,
+  XCircle,
+  History
 } from "lucide-react";
 
 export const COLORS = [
@@ -43,6 +46,9 @@ export const KEYBOARD_SHORTCUTS = {
     arrow: "A",
     text: "T",
     highlight: "H",
+    approved: "1",
+    rejected: "2",
+    revision: "3",
   },
   actions: {
     undo: "Ctrl+Z",
@@ -120,6 +126,26 @@ export const TOOLS = {
       shortcut: KEYBOARD_SHORTCUTS.tools.text,
     },
     { tool: "stickyNote", icon: StickyNote, label: "Sticky Note" },
+  ],
+  stamps: [
+    {
+      tool: "stampApproved",
+      icon: CheckCircle2,
+      label: "Approved",
+      shortcut: KEYBOARD_SHORTCUTS.tools.approved,
+    },
+    {
+      tool: "stampRejected",
+      icon: XCircle,
+      label: "Rejected",
+      shortcut: KEYBOARD_SHORTCUTS.tools.rejected,
+    },
+    {
+      tool: "stampRevision",
+      icon: History,
+      label: "Revision",
+      shortcut: KEYBOARD_SHORTCUTS.tools.revision,
+    },
   ],
   architectural: [
     {

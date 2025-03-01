@@ -148,6 +148,17 @@ export const Toolbar = () => {
           />
         ))}
       </ToolbarSection>
+      <ToolbarSection title="Stamps">
+        {TOOLS.stamps.map((tool) => (
+          <ToolButton
+            key={tool.tool}
+            tool={tool.tool}
+            icon={tool.icon}
+            label={tool.label}
+            shortcut={getOptionalShortcut(tool)}
+          />
+        ))}
+      </ToolbarSection>
       <ToolbarSection title="Architectural Symbols">
         {TOOLS.architectural.map((tool) => (
           <ToolButton

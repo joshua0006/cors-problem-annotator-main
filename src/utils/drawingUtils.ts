@@ -876,35 +876,93 @@ export const drawStamp = (
   if (!points.length || !style.stampType) return;
   const [start] = points;
 
-  const stampWidth = 120;
-  const stampHeight = 40;
+  // Apply scaling to coordinates
+  const x = start.x * scale;
+  const y = start.y * scale;
+  
+  // Size proportions - adjusted by scale
+  const stampWidth = 180 * scale;
+  const stampHeight = 50 * scale;
+  const borderRadius = 6 * scale;
 
   // Save context state
   ctx.save();
+  
+  // Set stamp styles based on type
+  let stampColor, icon;
+  
+  switch (style.stampType) {
+    case "approved":
+      stampColor = "#22c55e"; // Green
+      icon = "✓";
+      break;
+    case "rejected":
+      stampColor = "#ef4444"; // Red
+      icon = "✗";
+      break;
+    case "revision":
+      stampColor = "#f97316"; // Orange
+      icon = "↻";
+      break;
+    default:
+      stampColor = "#FF0000";
+      icon = "";
+  }
 
-  // Set stamp styles
-  ctx.strokeStyle = "#FF0000";
-  ctx.fillStyle = "#FF0000";
-  ctx.lineWidth = 2;
-  ctx.globalAlpha = style.opacity ?? 1;
-
-  // Draw stamp rectangle
+  // Set stamp opacity
+  ctx.globalAlpha = style.opacity ?? 1.0;
+  
+  // Draw stamp background with rounded corners
   ctx.beginPath();
-  ctx.rect(
-    start.x - stampWidth / 2,
-    start.y - stampHeight / 2,
-    stampWidth,
-    stampHeight
-  );
+  ctx.moveTo(x - stampWidth/2 + borderRadius, y - stampHeight/2);
+  ctx.lineTo(x + stampWidth/2 - borderRadius, y - stampHeight/2);
+  ctx.quadraticCurveTo(x + stampWidth/2, y - stampHeight/2, x + stampWidth/2, y - stampHeight/2 + borderRadius);
+  ctx.lineTo(x + stampWidth/2, y + stampHeight/2 - borderRadius);
+  ctx.quadraticCurveTo(x + stampWidth/2, y + stampHeight/2, x + stampWidth/2 - borderRadius, y + stampHeight/2);
+  ctx.lineTo(x - stampWidth/2 + borderRadius, y + stampHeight/2);
+  ctx.quadraticCurveTo(x - stampWidth/2, y + stampHeight/2, x - stampWidth/2, y + stampHeight/2 - borderRadius);
+  ctx.lineTo(x - stampWidth/2, y - stampHeight/2 + borderRadius);
+  ctx.quadraticCurveTo(x - stampWidth/2, y - stampHeight/2, x - stampWidth/2 + borderRadius, y - stampHeight/2);
+  ctx.closePath();
+  
+  // Draw border only (no background fill)
+  ctx.strokeStyle = stampColor;
+  ctx.lineWidth = 1.5 * scale;
+  ctx.setLineDash([]);
   ctx.stroke();
-
-  // Set text styles
-  ctx.font = `bold 20px Arial`;
-  ctx.textAlign = "center";
+  
+  // Calculate text and icon dimensions
+  const iconSize = 22 * scale;
+  const textSize = 20 * scale;
+  const text = style.stampType.toUpperCase();
+  
+  // Set text font for measurement
+  ctx.font = `bold ${textSize}px Arial`;
+  const textWidth = ctx.measureText(text).width;
+  
+  // Set icon font for approximate measurement
+  ctx.font = `bold ${iconSize}px Arial`;
+  const iconWidth = ctx.measureText(icon).width;
+  
+  // Calculate spacing between icon and text
+  const spacing = 15 * scale;
+  const totalContentWidth = iconWidth + spacing + textWidth;
+  
+  // Calculate positions to center the content
+  const contentStartX = x - totalContentWidth / 2;
+  
+  // Set up text properties
+  ctx.fillStyle = stampColor;
+  ctx.textAlign = "left"; // Changed to left alignment for precise positioning
   ctx.textBaseline = "middle";
-
-  // Draw stamp text
-  ctx.fillText(style.stampType.toUpperCase(), start.x, start.y);
+  
+  // Draw icon 
+  ctx.font = `bold ${iconSize}px Arial`;
+  ctx.fillText(icon, contentStartX, y);
+  
+  // Draw stamp text with proper spacing
+  ctx.font = `bold ${textSize}px Arial`;
+  ctx.fillText(text, contentStartX + iconWidth + spacing, y);
 
   // Restore context state
   ctx.restore();
@@ -919,24 +977,23 @@ export const isPointInStamp = (
   if (!annotation.points.length) return false;
 
   const [start] = annotation.points;
-  const stampWidth = 120;
-  const stampHeight = 40;
+  const stampWidth = 180; // Updated to match the new stamp width
+  const stampHeight = 50; // Updated to match the new stamp height
 
-  const scaledPoint = {
-    x: point.x * scale,
-    y: point.y * scale,
-  };
-
-  const scaledStart = {
-    x: start.x * scale,
-    y: start.y * scale,
-  };
+  // Calculate the bounds of the stamp
+  const left = (start.x - stampWidth / 2) * scale;
+  const right = (start.x + stampWidth / 2) * scale;
+  const top = (start.y - stampHeight / 2) * scale;
+  const bottom = (start.y + stampHeight / 2) * scale;
+  
+  // Add a small padding for easier selection
+  const padding = 5 * scale;
 
   return (
-    scaledPoint.x >= scaledStart.x - stampWidth / 2 &&
-    scaledPoint.x <= scaledStart.x + stampWidth / 2 &&
-    scaledPoint.y >= scaledStart.y - stampHeight / 2 &&
-    scaledPoint.y <= scaledStart.y + stampHeight / 2
+    point.x * scale >= left - padding &&
+    point.x * scale <= right + padding &&
+    point.y * scale <= bottom + padding &&
+    point.y * scale >= top - padding
   );
 };
 
@@ -973,6 +1030,48 @@ export const drawSelectionOutline = (
     
     // Draw more visible resize handles for highlights
     drawResizeHandles(ctx, annotation, scale, true);
+  } else if (type === "stamp") {
+    // Specific handling for stamp annotations
+    const [start] = annotation.points;
+    const stampWidth = 180 * scale;
+    const stampHeight = 50 * scale;
+    
+    // Draw selection rectangle around the stamp
+    ctx.beginPath();
+    ctx.rect(
+      start.x * scale - stampWidth / 2, 
+      start.y * scale - stampHeight / 2,
+      stampWidth,
+      stampHeight
+    );
+    ctx.stroke();
+    
+    // Add resize handles for stamps at the corners
+    const handleSize = 5;
+    ctx.fillStyle = "white";
+    ctx.strokeStyle = "#2563eb";
+    ctx.lineWidth = 1.5 * scale;
+    ctx.setLineDash([]);
+    
+    // Draw handles at corners
+    const cornerPoints = [
+      { x: start.x - stampWidth/(2*scale), y: start.y - stampHeight/(2*scale) }, // top-left
+      { x: start.x + stampWidth/(2*scale), y: start.y - stampHeight/(2*scale) }, // top-right
+      { x: start.x - stampWidth/(2*scale), y: start.y + stampHeight/(2*scale) }, // bottom-left
+      { x: start.x + stampWidth/(2*scale), y: start.y + stampHeight/(2*scale) }, // bottom-right
+    ];
+    
+    cornerPoints.forEach((point) => {
+      ctx.beginPath();
+      ctx.rect(
+        point.x * scale - (handleSize / 2),
+        point.y * scale - (handleSize / 2),
+        handleSize,
+        handleSize
+      );
+      ctx.fill();
+      ctx.stroke();
+    });
   } else {
     // For other shapes, follow their natural contour
     ctx.beginPath();
