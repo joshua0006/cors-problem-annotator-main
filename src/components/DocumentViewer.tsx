@@ -190,6 +190,20 @@ const CommentSection = memo(
     handleUpdateComment,
     handleDeleteComment,
     setEditingCommentId,
+  }: {
+    user: any;
+    newComment: string;
+    handleCommentChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+    handleAddComment: () => void;
+    comments: DocumentComment[];
+    loadingComments: boolean;
+    submittingComment: boolean;
+    editingCommentId: string | null;
+    editText: string;
+    setEditText: (text: string) => void;
+    handleUpdateComment: (id: string) => void;
+    handleDeleteComment: (id: string) => void;
+    setEditingCommentId: (id: string | null) => void;
   }) => (
     <div className="mt-8">
       <h3 className="text-sm font-medium text-gray-900 mb-4 flex items-center">
@@ -867,9 +881,9 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
             <Toolbar />
             <div
               className="relative bg-white rounded-lg shadow-sm p-4 flex-1"
-              style={{ height: viewerHeight }}
+              style={{ height: "100%" }}
             >
-              <PDFViewer file={file} />
+              <PDFViewer file={document.url} documentId={document.id} />
             </div>
           </div>
         ) : (

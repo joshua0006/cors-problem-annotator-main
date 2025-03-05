@@ -22,6 +22,7 @@ import { ChevronLeft, ChevronRight, Download, AlertTriangle, RefreshCw } from "l
 import { KeyboardShortcutGuide } from "./KeyboardShortcutGuide";
 import { useKeyboardShortcutGuide } from "../hooks/useKeyboardShortcutGuide";
 import { jsPDF } from "jspdf";
+import * as pdfjs from "pdfjs-dist";
 
 interface PDFViewerProps {
   file: File | string;
@@ -89,9 +90,12 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
   const [renderError, setRenderError] = useState<Error | null>(null);
   const [isViewerReady, setIsViewerReady] = useState(false);
   const [hasStartedLoading, setHasStartedLoading] = useState(false);
-  const [scale, setScale] = useState(1.2);
+  const [scale, setScale] = useState(1.0);
   const [pageChangeInProgress, setPageChangeInProgress] = useState(false);
   const [pdfFile, setPdfFile] = useState<File | null>(null);
+  
+  // Add new state for initial loading
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
   
   // Track which pages have been rendered to prevent duplicates
   const renderedPagesRef = useRef<Set<number>>(new Set());
@@ -271,7 +275,7 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
           }
           renderLockRef.current = false;
         } else {
-          console.log('[PDFViewer] Navigation ignored - page change already in progress');
+          console.log('[PDFViewer] Navigation ignored - rendering in progress');
           return;
         }
       } else {
@@ -366,14 +370,19 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
             const containerWidth = containerRef.current?.clientWidth || 800;
             const containerHeight = containerRef.current?.clientHeight || 1200;
             
-            // Calculate scale to fit the container
-            const widthScale = containerWidth / viewport.width;
-            const heightScale = containerHeight / viewport.height;
-            const scale = Math.min(widthScale, heightScale) * 0.95;
+            // Calculate scale to fit the container width exactly
+            // Account for padding (16px total for p-2 or 32px for p-4)
+            const padding = 32;
+            const availableWidth = containerWidth - padding;
+            const widthScale = availableWidth / viewport.width;
+            
+            // For initial rendering, prioritize fitting to width
+            // while maintaining aspect ratio
+            const scale = widthScale;
             
             viewport = page.getViewport({ scale });
 
-            // Set canvas dimensions
+            // Set canvas dimensions to match viewport exactly
             canvas.height = viewport.height;
             canvas.width = viewport.width;
 
@@ -596,6 +605,47 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
     
   }, [pdf]);
 
+  // Define function for fitting to width - placed at the top of other functions
+  const handleFitToWidth = useCallback(() => {
+    if (!page || !containerRef.current) return;
+    
+    const container = containerRef.current;
+    // Account for padding (16px total for p-2 or 32px for p-4)
+    const padding = 32; 
+    const availableWidth = container.clientWidth - padding;
+    
+    // Get the intrinsic dimensions of the PDF page
+    const viewport = page.getViewport({ scale: 1 });
+    const aspectRatio = viewport.height / viewport.width;
+    
+    // Calculate scale needed to fit exactly to width
+    const newScale = availableWidth / viewport.width;
+    
+    // Calculate new dimensions
+    const newWidth = viewport.width * newScale;
+    const newHeight = viewport.height * newScale;
+    
+    // Log the dimensions and scaling for debugging
+    console.log(`[PDFViewer] Original PDF dimensions: ${viewport.width}x${viewport.height}`);
+    console.log(`[PDFViewer] Aspect ratio: ${aspectRatio.toFixed(3)}`);
+    console.log(`[PDFViewer] Container width: ${availableWidth}`);
+    console.log(`[PDFViewer] New scale: ${newScale.toFixed(3)}`);
+    console.log(`[PDFViewer] New dimensions: ${newWidth.toFixed(0)}x${newHeight.toFixed(0)}`);
+    
+    // Update the scale
+    setScale(newScale);
+    
+    // Scroll to center after a brief delay to ensure rendering is complete
+    setTimeout(() => {
+      scrollToCenterDocument();
+    }, 100);
+    
+    // Enable automatic fit for future page changes
+    disableFitToWidthRef.current = false;
+    
+    console.log(`[PDFViewer] Fit to width: scale=${newScale}`);
+  }, [page, scrollToCenterDocument]);
+
   // Setup container dimensions
   useEffect(() => {
     if (!containerRef.current) return;
@@ -607,6 +657,15 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
       const { width, height } = container.getBoundingClientRect();
       setContainerWidth(width);
       setContainerHeight(height);
+      
+      // Reapply fit-to-width when container dimensions change
+      // and we have a page loaded
+      if (page && !disableFitToWidthRef.current) {
+        // Add a small delay to ensure measurements are accurate
+        setTimeout(() => {
+          handleFitToWidth();
+        }, 100);
+      }
     };
     
     // Initial size
@@ -616,13 +675,17 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
     const resizeObserver = new ResizeObserver(updateContainerSize);
     resizeObserver.observe(containerRef.current);
     
+    // Also handle window resize events for more reliable updates
+    window.addEventListener('resize', updateContainerSize);
+    
     return () => {
       if (containerRef.current) {
         resizeObserver.unobserve(containerRef.current);
       }
       resizeObserver.disconnect();
+      window.removeEventListener('resize', updateContainerSize);
     };
-  }, []);
+  }, [page, handleFitToWidth]);
 
   // Add keyboard shortcuts with documentId and current page
   useKeyboardShortcuts(documentId, currentPage);
@@ -765,16 +828,15 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
     input.click();
   }, [documentId, showToast]);
 
-  // Remove zoom functions
-  
-  const handleFitToWidth = useCallback(() => {
-    if (!containerRef.current || !page) return;
-    
-    const containerWidth = containerRef.current.clientWidth - 32; // Subtract padding
-    const viewport = page.getViewport({ scale: 1.0 });
-    const newScale = containerWidth / viewport.width;
-    setScale(newScale);
-  }, [page]);
+  // Auto fit to width when page is loaded
+  useEffect(() => {
+    if (page && containerRef.current && !disableFitToWidthRef.current) {
+      // Wait a moment for the page to be fully rendered
+      setTimeout(() => {
+        handleFitToWidth();
+      }, 200);
+    }
+  }, [page, handleFitToWidth]);
 
   // Function to generate a canvas with PDF content and annotations
   const createAnnotatedCanvas = useCallback(async (targetPage: PDFPageProxy, annotations: Annotation[]) => {
@@ -1074,55 +1136,60 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
     }
   }, [currentPage, pdf, documentId, verifyAnnotationIntegrity]);
 
-  // Function to verify PDF integrity
+  // Function to verify PDF integrity and rendering quality
   const verifyPDFIntegrity = useCallback(async () => {
-    if (!pdf) return false;
-    
-    try {
-      // Check if document can be accessed
-      const metadata = await pdf.getMetadata();
-      const title = metadata?.info ? (metadata.info as any).Title || 'Untitled' : 'Untitled';
-      console.log('[PDFViewer] PDF metadata verified:', title);
-      
-      // Verify page access - check first, middle and last page
-      const numPages = pdf.numPages;
-      const pagesToCheck = [1, Math.ceil(numPages / 2), numPages];
-      
-      for (const pageNum of pagesToCheck) {
-        try {
-          await pdf.getPage(pageNum);
-        } catch (error) {
-          console.error(`[PDFViewer] Failed to access page ${pageNum}:`, error);
-          showToast(`Error accessing page ${pageNum}. The PDF may be corrupted.`, "error");
-          return false;
-        }
-      }
-      
-      return true;
-    } catch (error) {
-      console.error('[PDFViewer] PDF integrity check failed:', error);
-      showToast('PDF integrity check failed. The document may be corrupted.', "error");
+    if (!pdf || !page) {
+      console.log('[PDFViewer] Cannot verify PDF integrity - PDF or page not loaded');
       return false;
     }
-  }, [pdf, showToast]);
-
-  // Reset loading state when file changes
-  useEffect(() => {
-    // Don't do anything if there's no file
-    if (!file) {
-      console.log('[PDFViewer] No file provided, skipping load');
-      return;
+  
+    try {
+      // Basic checks for PDF integrity
+      console.log('[PDFViewer] Verifying PDF integrity...');
+      console.log(`[PDFViewer] Number of pages: ${pdf.numPages}`);
+      console.log(`[PDFViewer] Page ${currentPage} dimensions: ${viewport.width}x${viewport.height}`);
+      
+      // Check if text content can be extracted (sign of a properly loaded PDF)
+      const textContent = await page.getTextContent();
+      const hasText = textContent.items.length > 0;
+      console.log(`[PDFViewer] Text content extraction: ${hasText ? 'Successful' : 'No text found'}`);
+      
+      // Check annotations
+      const annots = await page.getAnnotations();
+      console.log(`[PDFViewer] Annotations found: ${annots.length}`);
+      
+      // Log successful verification
+      console.log('[PDFViewer] PDF integrity verification complete - PDF loaded correctly');
+      return true;
+    } catch (error) {
+      console.error('[PDFViewer] Error verifying PDF integrity:', error);
+      return false;
     }
+  }, [pdf, page, currentPage, viewport]);
+
+  // Run PDF integrity check when page is loaded
+  useEffect(() => {
+    if (page && !isPdfLoading && !isPageLoading) {
+      // Verify PDF integrity after a short delay to ensure rendering is complete
+      setTimeout(() => {
+        verifyPDFIntegrity();
+      }, 500);
+    }
+  }, [page, isPdfLoading, isPageLoading, verifyPDFIntegrity]);
+
+  // Initialize PDFjs and load document when file changes
+  useEffect(() => {
+    let currentFileId = Math.random().toString(36).substring(2, 9);
+    console.log(`[PDFViewer] New file detected. Initializing with ID: ${currentFileId}`);
     
-    // Generate a unique ID for this file
-    const currentFileId = typeof file === 'string' ? file : `${file.name}_${file.lastModified}`;
-    
-    console.log(`[PDFViewer] Processing file: ${currentFileId}`);
-    
-    // Clear state for a fresh load
-    setHasStartedLoading(false);
+    // Reset all state for a fresh load
+    // PDF and page state are managed by custom hooks (usePDFDocument and usePDFPage)
     setCurrentPage(1);
+    setCurrentAnnotations([]);
+    setIsViewerReady(false);
+    setHasStartedLoading(false);
     setRenderError(null);
+    setIsInitialLoading(true); // Start with loading state
     
     // Reset render tracking
     hasRenderedOnceRef.current = {};
@@ -1149,36 +1216,85 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
           .catch(error => {
             console.error('[PDFViewer] Error loading PDF from URL:', error);
             setRenderError(error instanceof Error ? error : new Error(String(error)));
+            setIsInitialLoading(false); // Stop loading state on error
             // Try once more with a different approach if it failed
             setTimeout(() => {
-              setPdfFile(null);
-              setPdfFile(file as any); // Try direct loading via string as fallback
+              try {
+                // The PDF will be loaded by usePDFDocument hook after setting the file
+                setPdfFile(new File([new Uint8Array(0)], 'fallback.pdf', { type: 'application/pdf' }));
+                setCurrentPage(1);
+                setHasStartedLoading(false);
+                setIsInitialLoading(false); // Stop loading state
+              } catch (e) {
+                console.error('[PDFViewer] Failed to recover:', e);
+                setRenderError(e instanceof Error ? e : new Error(String(e)));
+                setIsInitialLoading(false); // Stop loading state
+              }
             }, 500);
           });
-      } else {
-        // For File object, load directly
-        setPdfFile(null); // Clear first
-        setTimeout(() => {
-          setPdfFile(file);
-          setHasStartedLoading(true);
-        }, 50);
+      } else if (file instanceof File) {
+        // For File object, use it directly
+        setPdfFile(file);
+        setHasStartedLoading(true);
       }
     };
     
-    // Attempt to load the PDF
-    loadPdf();
-    
-    // Cleanup function
-    return () => {
-      // If we need to cancel any pending operations, do it here
-      if (renderTaskRef.current) {
-        try {
-          renderTaskRef.current.cancel();
-        } catch (error) {
-          console.error('[PDFViewer] Error cancelling render task:', error);
+    const initializePdfViewer = async () => {
+      if (!pdfFile) {
+        loadPdf();
+        return;
+      }
+      
+      console.log(`[PDFViewer] Initializing PDF viewer with file: ${pdfFile.name}`);
+      
+      try {
+        initializationStartedRef.current = true;
+        
+        // No need to manually load PDF - it's handled by usePDFDocument hook
+        // The hook will use pdfFile to load the PDF
+        
+        // Update state to indicate file is loaded but not yet processed
+        // PDF processing will proceed in the usePDFDocument and usePDFPage hooks
+        
+        // Set initial scale based on container width
+        if (containerRef.current) {
+          const containerWidth = containerRef.current.clientWidth - 32; // Account for padding
+          const containerHeight = containerRef.current.clientHeight - 32;
+          
+          setContainerWidth(containerWidth);
+          setContainerHeight(containerHeight);
+          
+          // Schedule fit to width after a delay to ensure container is rendered
+          setTimeout(() => {
+            handleFitToWidth();
+          }, 100);
         }
+        
+        // PDF loading state will be updated by the hooks
+        setIsInitialLoading(false);
+      } catch (error) {
+        console.error('[PDFViewer] Failed to initialize PDF:', error);
+        setRenderError(error instanceof Error ? error : new Error('Failed to load PDF'));
+        setHasStartedLoading(false);
+        setIsInitialLoading(false); // Stop loading state on error
+      }
+    };
+    
+    if (file) {
+      initializePdfViewer();
+    }
+    
+    return () => {
+      // Clean up
+      initializationStartedRef.current = false;
+      
+      // Cancel any ongoing render task
+      if (renderTaskRef.current) {
+        renderTaskRef.current.cancel();
         renderTaskRef.current = null;
       }
+      
+      setIsInitialLoading(false); // Ensure loading state is reset on unmount
     };
   }, [file]); // Only depend on file to prevent loops
 
@@ -1404,12 +1520,108 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
 
       <div className="pdf-container h-full flex-1 overflow-hidden" ref={containerRef}>
         {/* PDF Viewer - Fixed container with scrollable content */}
-        <div className="relative flex-1 overflow-auto bg-gray-100 p-2 md:p-4">
+        <div className="relative flex-1 overflow-auto bg-gray-100 p-2 md:p-4 h-full w-full">
+          {/* Initial Loading Animation - before PDF processing has started */}
+          {isInitialLoading && !hasStartedLoading && !renderError && (
+            <div className="absolute inset-0 flex items-center justify-center z-50 bg-white">
+              <div className="flex flex-col items-center max-w-md text-center p-8">
+                <div className="relative w-20 h-20 mb-4">
+                  {/* Subtle pulsing background */}
+                  <div className="absolute inset-0 rounded-full bg-blue-50 animate-pulse"></div>
+                  
+                  {/* Staggered dots animation */}
+                  <div className="absolute inset-0 flex justify-center items-end pb-2">
+                    <div className="flex space-x-2">
+                      <div className="w-2.5 h-2.5 bg-blue-600 rounded-full animate-bounce" style={{ animationDelay: "0ms", animationDuration: "1s" }}></div>
+                      <div className="w-2.5 h-2.5 bg-blue-500 rounded-full animate-bounce" style={{ animationDelay: "150ms", animationDuration: "1s" }}></div>
+                      <div className="w-2.5 h-2.5 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: "300ms", animationDuration: "1s" }}></div>
+                    </div>
+                  </div>
+                  
+                  {/* Document icon */}
+                  <div className="absolute inset-0 flex items-center justify-center opacity-80">
+                    <svg 
+                      xmlns="http://www.w3.org/2000/svg" 
+                      className="h-10 w-10 text-blue-700" 
+                      fill="none" 
+                      viewBox="0 0 24 24" 
+                      stroke="currentColor"
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                  </div>
+                </div>
+                <h3 className="text-lg font-medium text-gray-800 mb-1">Initializing PDF Viewer</h3>
+                <p className="text-sm text-gray-500">Preparing to load your document...</p>
+              </div>
+            </div>
+          )}
+          
+          {/* Processing Animation - shows when loading has started but PDF isn't ready yet */}
+          {hasStartedLoading && !pdf && !renderError && (
+            <div className="absolute inset-0 flex items-center justify-center z-50 bg-white bg-opacity-95">
+              <div className="flex flex-col items-center max-w-md text-center p-8">
+                <div className="relative w-24 h-24 mb-5">
+                  {/* Background circle */}
+                  <div className="absolute inset-0 rounded-full bg-blue-50"></div>
+                  
+                  {/* Circular progress spinner */}
+                  <div className="absolute inset-0 rounded-full border-4 border-transparent border-t-blue-600 border-r-blue-400 animate-spin" style={{ animationDuration: "1.5s" }}></div>
+                  
+                  {/* Central document icon */}
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <svg 
+                      xmlns="http://www.w3.org/2000/svg" 
+                      className="h-12 w-12 text-blue-600" 
+                      fill="none" 
+                      viewBox="0 0 24 24" 
+                      stroke="currentColor"
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M10 9h4m-4 4h4" />
+                    </svg>
+                  </div>
+                </div>
+                <h3 className="text-xl font-medium text-gray-800 mb-2">Loading PDF</h3>
+                <p className="text-sm text-gray-600 max-w-xs">Processing your document. This may take a moment for larger files...</p>
+              </div>
+            </div>
+          )}
+          
+          {/* Error state */}
+          {renderError && (
+            <div className="absolute inset-0 flex items-center justify-center z-50 bg-white">
+              <div className="bg-white p-8 rounded-xl shadow-lg max-w-md mx-auto text-center">
+                <div className="w-20 h-20 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-5">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                </div>
+                <h3 className="text-xl font-semibold text-red-900 mb-3">Failed to Load PDF</h3>
+                <p className="text-gray-600 mb-5 text-sm">{renderError.message}</p>
+                <div className="flex flex-col space-y-2 sm:flex-row sm:space-y-0 sm:space-x-3 justify-center">
+                  <button 
+                    onClick={() => window.location.reload()}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+                  >
+                    Reload Page
+                  </button>
+                  <button 
+                    onClick={() => setRenderError(null)}
+                    className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+          
           <div 
             className="pdf-viewer-container mx-auto"
             style={{
-              width: page ? `${viewport.width}px` : `${containerWidth}px`,
-              height: page ? `${viewport.height}px` : `${containerHeight}px`,
+              width: page ? `${viewport.width}px` : '100%',
+              height: page ? `${viewport.height}px` : '100%',
               position: 'relative',
               maxWidth: '100%',
               marginBottom: '20px',
@@ -1441,14 +1653,33 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
             
             {/* Loading indicator during rendering */}
             {(isRendering || pageChangeInProgress) && (
-              <div className="absolute top-0 left-0 z-50 w-full h-full flex items-center justify-center bg-white bg-opacity-70">
-                <div className="flex flex-col items-center bg-white p-4 rounded-lg shadow-lg">
-                  <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-500 mb-2"></div>
-                  <div className="text-gray-700">
-                    {pageChangeInProgress ? `Loading page ${currentPage}...` : 'Rendering PDF...'}
+              <div className="absolute top-0 left-0 z-50 w-full h-full flex items-center justify-center bg-white bg-opacity-80 backdrop-blur-[1px]">
+                <div className="flex flex-col items-center bg-white p-5 rounded-xl shadow-lg">
+                  <div className="relative w-16 h-16 mb-3">
+                    {/* Rotating rings */}
+                    <div className="absolute inset-0 rounded-full border-4 border-blue-100 border-t-blue-600 animate-spin" style={{ animationDuration: "1s" }}></div>
+                    <div className="absolute inset-1 rounded-full border-4 border-transparent border-r-blue-400 animate-spin" style={{ animationDuration: "1.5s", animationDirection: "reverse" }}></div>
+                    
+                    {/* Page icon */}
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-7 w-7 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path 
+                          strokeLinecap="round" 
+                          strokeLinejoin="round" 
+                          strokeWidth={1.5} 
+                          d={pageChangeInProgress ? "M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" : "M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"} 
+                        />
+                      </svg>
+                    </div>
+                  </div>
+                  <div className="text-gray-800 font-medium text-base">
+                    {pageChangeInProgress ? `Loading page ${currentPage}...` : 'Rendering content...'}
                   </div>
                   {renderAttempts > 0 && (
-                    <div className="text-amber-600 text-xs mt-1">
+                    <div className="text-amber-600 text-xs mt-1 flex items-center">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
                       Attempt {renderAttempts + 1}/3
                     </div>
                   )}

@@ -21,6 +21,7 @@ import { createShareToken } from '../services/shareService';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import { ConfirmDialog } from './ui/ConfirmDialog';
+import { RenameDialog } from './ui/RenameDialog';
 
 // Local type definition for the DocumentViewer's Folder type
 interface ViewerFolder {
@@ -93,6 +94,10 @@ export default function DocumentList({
   const { user } = useAuth();
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [itemToDelete, setItemToDelete] = useState<{id: string, type: 'document' | 'folder', name: string} | null>(null);
+  
+  // Add new state for rename dialog
+  const [renameDialogOpen, setRenameDialogOpen] = useState(false);
+  const [itemToRename, setItemToRename] = useState<{id: string, type: 'document' | 'folder', name: string} | null>(null);
 
   const currentDocs = isSharedView ? sharedDocuments || [] : documents.filter(
     (doc) => doc.folderId === currentFolder?.id
@@ -101,11 +106,46 @@ export default function DocumentList({
     (folder) => folder.parentId === currentFolder?.id
   );
 
-  const handleStartEdit = (id: string, name: string) => {
-    setEditingId(id);
-    setEditName(name);
+  // Replace handleStartEdit with openRenameDialog
+  const openRenameDialog = (id: string, type: 'document' | 'folder', name: string) => {
+    setItemToRename({ id, type, name });
+    setRenameDialogOpen(true);
   };
 
+  // Add handleRename function
+  const handleRename = async (newName: string) => {
+    if (!itemToRename) return;
+    
+    try {
+      setLoading(true);
+      if (itemToRename.type === 'folder') {
+        await onUpdateFolder(itemToRename.id, newName);
+      } else {
+        await onUpdateDocument(itemToRename.id, { name: newName });
+      }
+      
+      if (onRefresh) {
+        await onRefresh();
+      }
+      
+      showToast(`${itemToRename.type === 'folder' ? 'Folder' : 'File'} renamed successfully`, 'success');
+    } catch (error) {
+      console.error("Error renaming item:", error);
+      showToast(`Failed to rename ${itemToRename.type === 'folder' ? 'folder' : 'file'}`, 'error');
+    } finally {
+      setLoading(false);
+      setRenameDialogOpen(false);
+      setItemToRename(null);
+    }
+  };
+
+  // Close rename dialog
+  const closeRenameDialog = () => {
+    setRenameDialogOpen(false);
+    setItemToRename(null);
+  };
+
+  // Keep handleSaveEdit for backwards compatibility
   const handleSaveEdit = async (id: string, type: "folder" | "document") => {
     if (editName.trim()) {
       try {
@@ -307,7 +347,7 @@ export default function DocumentList({
                   {!isSharedView && (
                     <div className="flex items-center space-x-2">
                       <button
-                        onClick={() => handleStartEdit(folder.id, folder.name)}
+                        onClick={() => openRenameDialog(folder.id, 'folder', folder.name)}
                         className="p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100"
                       >
                         <Pencil className="w-4 h-4" />
@@ -364,7 +404,7 @@ export default function DocumentList({
                   {!isSharedView && (
                     <div className="flex items-center space-x-1">
                       <button
-                        onClick={() => handleStartEdit(doc.id, doc.name)}
+                        onClick={() => openRenameDialog(doc.id, 'document', doc.name)}
                         className="p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100"
                       >
                         <Pencil className="w-4 h-4" />
@@ -411,6 +451,15 @@ export default function DocumentList({
         onConfirm={handleDeleteItem}
         onCancel={() => setDeleteConfirmOpen(false)}
         danger={true}
+      />
+      
+      <RenameDialog
+        isOpen={renameDialogOpen}
+        title={`Rename ${itemToRename?.type === 'folder' ? 'Folder' : 'File'}`}
+        currentName={itemToRename?.name || ''}
+        itemType={itemToRename?.type === 'folder' ? 'folder' : 'file'}
+        onRename={handleRename}
+        onCancel={closeRenameDialog}
       />
     </div>
   );
