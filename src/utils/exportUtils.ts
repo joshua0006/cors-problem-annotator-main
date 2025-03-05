@@ -1,6 +1,6 @@
 import { PDFPageProxy } from "pdfjs-dist";
 import { Annotation } from "../types/annotation";
-import { drawAnnotation } from "../components/canvas/drawingUtils";
+import { drawAnnotation } from "../utils/drawingUtils";
 import { jsPDF } from "jspdf";
 import { useAnnotationStore } from "../store/useAnnotationStore";
 

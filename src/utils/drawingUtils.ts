@@ -612,6 +612,9 @@ export const drawAnnotation = (
       );
       break;
     case "stamp":
+    case "stampApproved":
+    case "stampRejected":
+    case "stampRevision":
       drawStamp(ctx, annotation.points, annotation.style, scale);
       break;
     case "triangle":
@@ -753,26 +756,23 @@ export const drawResizeHandles = (
         Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2)
       );
     }
+
+    // Draw more prominent resize handles at 8 positions around the circle
+    const handles = [];
+    for (let i = 0; i < 8; i++) {
+      const angle = (i * Math.PI) / 4;
+      handles.push({
+        x: centerX + Math.cos(angle) * radius,
+        y: centerY + Math.sin(angle) * radius,
+      });
+    }
     
-    // Create handles on the major cardinal points
-    const handlePoints = [
-      { x: centerX + radius, y: centerY }, // right
-      { x: centerX - radius, y: centerY }, // left
-      { x: centerX, y: centerY + radius }, // bottom
-      { x: centerX, y: centerY - radius }, // top
-      { x: centerX + radius * Math.cos(Math.PI / 4), y: centerY + radius * Math.sin(Math.PI / 4) }, // bottom right
-      { x: centerX + radius * Math.cos(Math.PI * 3 / 4), y: centerY + radius * Math.sin(Math.PI * 3 / 4) }, // bottom left
-      { x: centerX + radius * Math.cos(Math.PI * 5 / 4), y: centerY + radius * Math.sin(Math.PI * 5 / 4) }, // top left
-      { x: centerX + radius * Math.cos(Math.PI * 7 / 4), y: centerY + radius * Math.sin(Math.PI * 7 / 4) }  // top right
-    ];
+    // Draw the handles as filled squares with borders
+    ctx.fillStyle = "white";
+    ctx.strokeStyle = handleColor;
+    ctx.lineWidth = 1.5 * scale;
     
-    // Draw the handles
-    handlePoints.forEach((point) => {
-      ctx.fillStyle = "white";
-      ctx.strokeStyle = handleColor;
-      ctx.lineWidth = 1.5 * scale;
-      
-      // Draw handle square
+    handles.forEach((point) => {
       ctx.beginPath();
       ctx.rect(
         point.x * scale - (handleSize / 2),
@@ -783,7 +783,8 @@ export const drawResizeHandles = (
       ctx.fill();
       ctx.stroke();
     });
-  } else {
+  }
+  else {
     // Original code for handling other shapes
     const bounds = getShapeBounds(annotation.points);
     const cornerPoints = [
@@ -1030,7 +1031,8 @@ export const drawSelectionOutline = (
     
     // Draw more visible resize handles for highlights
     drawResizeHandles(ctx, annotation, scale, true);
-  } else if (type === "stamp") {
+  } else if (type === "stamp" || type === "stampApproved" || 
+             type === "stampRejected" || type === "stampRevision") {
     // Specific handling for stamp annotations
     const [start] = annotation.points;
     const stampWidth = 180 * scale;
@@ -1375,4 +1377,42 @@ export const drawToilet = (
   ctx.stroke();
 
   ctx.restore();
+};
+
+// Remove the broken function and add a fresh one
+export const isPointInsideCircle = (
+  point: Point,
+  annotation: Annotation,
+  scale: number = 1
+): boolean => {
+  if (annotation.type !== "circle" || annotation.points.length < 2) return false;
+  
+  const [p1, p2] = annotation.points;
+  const diameterMode = annotation.style.circleDiameterMode as boolean || false;
+  
+  let centerX, centerY, radius;
+  
+  if (diameterMode) {
+    // In diameter mode, center is midpoint between two points
+    centerX = (p1.x + p2.x) / 2;
+    centerY = (p1.y + p2.y) / 2;
+    radius = Math.sqrt(
+      Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2)
+    ) / 2;
+  } else {
+    // In center-radius mode, first point is center
+    centerX = p1.x;
+    centerY = p1.y;
+    radius = Math.sqrt(
+      Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2)
+    );
+  }
+  
+  // Calculate distance from point to center
+  const distance = Math.sqrt(
+    Math.pow(point.x - centerX, 2) + Math.pow(point.y - centerY, 2)
+  );
+  
+  // Check if point is within the circle
+  return distance <= radius;
 };

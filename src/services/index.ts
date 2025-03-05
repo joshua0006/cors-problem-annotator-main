@@ -5,3 +5,6 @@ export * from './taskService';
 export * from './folderService';
 export * from './settingsService';
 export * from './milestoneService';
+export * from './uploadService';
+export * from './shareService';
+export * from './uploadTokenService';

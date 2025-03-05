@@ -1,7 +1,8 @@
-import { Plus, FolderPlus, Upload, AlertCircle, Loader2, FileText, FolderOpen } from 'lucide-react';
+import { Plus, FolderPlus, Upload, AlertCircle, Loader2, FileText, FolderOpen, Link } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 import { Document, Folder } from '../types';
 import { motion, AnimatePresence } from 'framer-motion';
+import GenerateUploadToken from './GenerateUploadToken';
 
 interface DocumentActionsProps {
   projectId: string;
@@ -25,6 +26,7 @@ export default function DocumentActions({
 }: DocumentActionsProps) {
   const [showFolderInput, setShowFolderInput] = useState(false);
   const [showFileInput, setShowFileInput] = useState(false);
+  const [showTokenGenerator, setShowTokenGenerator] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
   const [newFileName, setNewFileName] = useState('');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -37,6 +39,7 @@ export default function DocumentActions({
 
   const folderInputRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLDivElement>(null);
+  const tokenGeneratorRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -48,8 +51,10 @@ export default function DocumentActions({
       if (fileInputRef.current && !fileInputRef.current.contains(event.target as Node)) {
         setShowFileInput(false);
         setSelectedFile(null);
-        setNewFileName('');
         setError('');
+      }
+      if (tokenGeneratorRef.current && !tokenGeneratorRef.current.contains(event.target as Node)) {
+        setShowTokenGenerator(false);
       }
     };
 
@@ -199,26 +204,33 @@ export default function DocumentActions({
 
   return (
     <div className="relative">
-      <div className="flex items-center space-x-2">
+      <div className="flex gap-2 items-center">
         <button
+          className="inline-flex items-center gap-1 rounded bg-primary-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-primary-700"
           onClick={() => setShowFolderInput(true)}
           disabled={isProcessing}
-          className="flex items-center space-x-2 px-3 py-2 text-sm bg-white border border-gray-200 rounded-md hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          <FolderPlus className="w-4 h-4" />
-          <span>New Folder</span>
+          <FolderPlus size={14} />
+          New Folder
         </button>
         <button
-          onClick={() => {
-            setShowFileInput(true);
-            setSelectedFolderId(currentFolderId);
-          }}
+          className="inline-flex items-center gap-1 rounded bg-primary-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-primary-700"
+          onClick={() => setShowFileInput(true)}
           disabled={isProcessing}
-          className="flex items-center space-x-2 px-3 py-2 text-sm bg-white border border-gray-200 rounded-md hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          <Upload className="w-4 h-4" />
-          <span>Upload PDF</span>
+          <Upload size={14} />
+          Upload
         </button>
+        {currentFolderId && (
+          <button
+            className="inline-flex items-center gap-1 rounded bg-green-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-green-700"
+            onClick={() => setShowTokenGenerator(true)}
+            disabled={isProcessing}
+          >
+            <Link size={14} />
+            Share Upload Link
+          </button>
+        )}
       </div>
 
       <AnimatePresence>
@@ -412,6 +424,28 @@ export default function DocumentActions({
                 )}
               </button>
             </div>
+          </motion.div>
+        )}
+
+        {showTokenGenerator && currentFolderId && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-50"
+          >
+            <motion.div
+              ref={tokenGeneratorRef}
+              initial={{ scale: 0.9 }}
+              animate={{ scale: 1 }}
+              exit={{ scale: 0.9 }}
+            >
+              <GenerateUploadToken
+                folderId={currentFolderId}
+                folderName={folders.find(f => f.id === currentFolderId)?.name}
+                onClose={() => setShowTokenGenerator(false)}
+              />
+            </motion.div>
           </motion.div>
         )}
       </AnimatePresence>

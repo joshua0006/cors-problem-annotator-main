@@ -9,6 +9,7 @@ export type ResizeHandle =
   | "topRight"
   | "bottomLeft"
   | "bottomRight"
+  | "center"
   | null;
 
 interface Bounds {
@@ -51,6 +52,8 @@ export const getResizeCursor = (handle: ResizeHandle): string => {
     case "left":
     case "right":
       return "ew-resize";
+    case "center":
+      return "move";
     default:
       return "default";
   }
@@ -74,6 +77,7 @@ export const getResizeHandle = (
     bottom: { x: (bounds.left + bounds.right) / 2, y: bounds.bottom },
     left: { x: bounds.left, y: (bounds.top + bounds.bottom) / 2 },
     right: { x: bounds.right, y: (bounds.top + bounds.bottom) / 2 },
+    center: { x: (bounds.left + bounds.right) / 2, y: (bounds.top + bounds.bottom) / 2 },
   };
 
   // Check each handle
@@ -102,7 +106,8 @@ export const getResizedCirclePoints = (
   handle: ResizeHandle,
   currentPoint: Point,
   isDiameterMode: boolean = false,
-  minSize: number = 10
+  minSize: number = 10,
+  keepAspectRatio: boolean = false
 ): Point[] => {
   if (originalPoints.length < 2) return originalPoints;
   
@@ -120,82 +125,217 @@ export const getResizedCirclePoints = (
     const centerX = (p1.x + p2.x) / 2;
     const centerY = (p1.y + p2.y) / 2;
     
-    // Calculate new radius based on the handle being dragged
-    let dx = 0;
-    let dy = 0;
+    // Calculate original radius
+    const originalRadius = Math.sqrt(
+      Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2)
+    ) / 2;
     
-    switch (handle) {
-      case "topLeft":
-      case "top":
-      case "left":
-        // These handles should move the point opposite to the center
-        dx = currentPoint.x - centerX;
-        dy = currentPoint.y - centerY;
-        newPoints[0] = { 
-          x: centerX + dx, 
-          y: centerY + dy 
-        };
-        newPoints[1] = { 
-          x: centerX - dx, 
-          y: centerY - dy 
-        };
-        break;
-        
-      case "topRight":
-      case "right":
-        dx = currentPoint.x - centerX;
-        dy = currentPoint.y - centerY;
-        newPoints[0] = { 
-          x: centerX - dx, 
-          y: centerY + dy 
-        };
-        newPoints[1] = { 
-          x: centerX + dx, 
-          y: centerY - dy 
-        };
-        break;
-        
-      case "bottomLeft":
-      case "bottom":
-        dx = currentPoint.x - centerX;
-        dy = currentPoint.y - centerY;
-        newPoints[0] = { 
-          x: centerX + dx, 
-          y: centerY - dy 
-        };
-        newPoints[1] = { 
-          x: centerX - dx, 
-          y: centerY + dy 
-        };
-        break;
-        
-      case "bottomRight":
-        dx = currentPoint.x - centerX;
-        dy = currentPoint.y - centerY;
-        newPoints[0] = { 
-          x: centerX - dx, 
-          y: centerY - dy 
-        };
-        newPoints[1] = { 
-          x: centerX + dx, 
-          y: centerY + dy 
-        };
-        break;
-        
-      default:
+    // Check if we're using the special "center" handle
+    if (handle === "center") {
+      // When dragging from center, we keep the center position
+      // but resize the circle based on drag distance
+      
+      // Calculate distance from center to current point
+      const distance = Math.sqrt(
+        Math.pow(currentPoint.x - centerX, 2) + 
+        Math.pow(currentPoint.y - centerY, 2)
+      );
+      
+      // Ensure minimum circle size
+      if (distance < minSize / 2) {
         return originalPoints;
+      }
+      
+      // Calculate direction vector from center to current point
+      const dx = currentPoint.x - centerX;
+      const dy = currentPoint.y - centerY;
+      
+      // Normalize the direction vector
+      const length = Math.sqrt(dx * dx + dy * dy);
+      const normalizedDx = dx / length;
+      const normalizedDy = dy / length;
+      
+      // Calculate new points to maintain center but adjust radius
+      newPoints[0] = {
+        x: centerX - normalizedDx * distance,
+        y: centerY - normalizedDy * distance
+      };
+      
+      newPoints[1] = {
+        x: centerX + normalizedDx * distance,
+        y: centerY + normalizedDy * distance
+      };
+      
+      return newPoints;
     }
+    
+    // For regular handle points on the perimeter, maintain the center
+    // but update the radius based on the new handle position
+    
+    // Calculate vector from center to the handle point
+    const handleVector = {
+      x: currentPoint.x - centerX,
+      y: currentPoint.y - centerY
+    };
+    
+    // Calculate the distance from center to current point (new radius)
+    const newDistance = Math.sqrt(
+      handleVector.x * handleVector.x + 
+      handleVector.y * handleVector.y
+    );
+    
+    // Ensure minimum circle size
+    if (newDistance < minSize / 2) {
+      return originalPoints;
+    }
+    
+    // For uniform resizing (with Shift key), 
+    // we want to maintain a perfect circle from the center point
+    if (keepAspectRatio) {
+      // Create a perfect circle based on the new radius
+      // Find angles to place points opposite each other through the center
+      let angle = 0;
+      
+      // Determine the angle based on which handle is being dragged
+      switch (handle) {
+        case "right": angle = 0; break;
+        case "bottomRight": angle = Math.PI / 4; break;
+        case "bottom": angle = Math.PI / 2; break;
+        case "bottomLeft": angle = 3 * Math.PI / 4; break;
+        case "left": angle = Math.PI; break;
+        case "topLeft": angle = 5 * Math.PI / 4; break;
+        case "top": angle = 3 * Math.PI / 2; break;
+        case "topRight": angle = 7 * Math.PI / 4; break;
+        default: angle = Math.atan2(handleVector.y, handleVector.x);
+      }
+      
+      // Set both points to create a perfect circle
+      if (isDiameterMode) {
+        // In diameter mode, points should be on opposite sides
+        newPoints[0] = {
+          x: centerX + newDistance * Math.cos(angle + Math.PI),
+          y: centerY + newDistance * Math.sin(angle + Math.PI)
+        };
+        
+        newPoints[1] = {
+          x: centerX + newDistance * Math.cos(angle),
+          y: centerY + newDistance * Math.sin(angle)
+        };
+      } else {
+        // In center-radius mode, first point is center, second is perimeter
+        newPoints[0] = { x: centerX, y: centerY };
+        newPoints[1] = {
+          x: centerX + newDistance * Math.cos(angle),
+          y: centerY + newDistance * Math.sin(angle)
+        };
+      }
+      
+      return newPoints;
+    }
+    
+    // Regular resizing - calculate direction vector and angle to the handle
+    const angle = Math.atan2(handleVector.y, handleVector.x);
+    
+    // For diameter mode, update both points to maintain the center
+    if (isDiameterMode) {
+      // In diameter mode, points should be on opposite sides
+      newPoints[0] = {
+        x: centerX + newDistance * Math.cos(angle + Math.PI),
+        y: centerY + newDistance * Math.sin(angle + Math.PI)
+      };
+      
+      newPoints[1] = {
+        x: centerX + newDistance * Math.cos(angle),
+        y: centerY + newDistance * Math.sin(angle)
+      };
+    } else {
+      // In center-radius mode, first point is center, second is on perimeter
+      // Keep the center point fixed
+      newPoints[0] = { x: centerX, y: centerY };
+      newPoints[1] = {
+        x: centerX + newDistance * Math.cos(angle),
+        y: centerY + newDistance * Math.sin(angle)
+      };
+    }
+    
+    return newPoints;
   } else {
     // In center-radius mode, p1 is the center, p2 is a point on the circumference
-    // We keep the center fixed and only move the point on the circumference
-    
-    // When dragging handles, calculate new position of point on circumference
     const centerX = p1.x;
     const centerY = p1.y;
     
+    // Check if we're using the special "center" handle
+    if (handle === "center") {
+      // For center handle in center-radius mode, we keep the same radius
+      // but calculate a new position on the perimeter based on drag direction
+      
+      // Calculate distance and direction from center to current point
+      const dx = currentPoint.x - centerX;
+      const dy = currentPoint.y - centerY;
+      
+      // Get the original radius
+      const originalRadius = Math.sqrt(
+        Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2)
+      );
+      
+      // Normalize the direction vector and scale by original radius
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      
+      // Avoid division by zero
+      if (distance < 0.001) {
+        return originalPoints;
+      }
+      
+      const normalizedDx = dx / distance;
+      const normalizedDy = dy / distance;
+      
+      // Update only the second point to maintain radius but change direction
+      newPoints[1] = {
+        x: centerX + normalizedDx * originalRadius,
+        y: centerY + normalizedDy * originalRadius
+      };
+      
+      return newPoints;
+    }
+    
+    // When dragging handles on the circle edge
     // Calculate distance from center to current point
     const dx = currentPoint.x - centerX;
     const dy = currentPoint.y - centerY;
+    
+    // For uniform resizing (with Shift key)
+    if (keepAspectRatio) {
+      // Keep the direction the same as the original but update the distance
+      const originalVector = {
+        x: p2.x - p1.x,
+        y: p2.y - p1.y
+      };
+      
+      // Get the original direction
+      const originalDistance = Math.sqrt(
+        originalVector.x * originalVector.x + originalVector.y * originalVector.y
+      );
+      
+      const newDistance = Math.sqrt(dx * dx + dy * dy);
+      
+      // Ensure minimum circle size
+      if (newDistance < minSize / 2) {
+        return originalPoints;
+      }
+      
+      // Maintain the original angle but update the distance
+      if (originalDistance > 0) {
+        const normalizedOriginalX = originalVector.x / originalDistance;
+        const normalizedOriginalY = originalVector.y / originalDistance;
+        
+        newPoints[1] = {
+          x: centerX + normalizedOriginalX * newDistance,
+          y: centerY + normalizedOriginalY * newDistance
+        };
+      }
+      
+      return newPoints;
+    }
     
     // Calculate the normalized distance (direction vector)
     const distance = Math.sqrt(dx * dx + dy * dy);
@@ -237,7 +377,7 @@ export const getResizedPoints = (
   // Handle circle resizing separately if this is a circle annotation
   if (annotation && annotation.type === "circle") {
     const isDiameterMode = annotation.style.circleDiameterMode as boolean || false;
-    return getResizedCirclePoints(originalPoints, handle, currentPoint, isDiameterMode, minSize);
+    return getResizedCirclePoints(originalPoints, handle, currentPoint, isDiameterMode, minSize, keepAspectRatio);
   }
 
   const bounds = getBounds(originalPoints);
@@ -315,6 +455,10 @@ export const getResizedPoints = (
     case "left":
       newBounds.left = currentPoint.x;
       break;
+
+    case "center":
+      // Center handle does not affect bounds
+      return originalPoints;
 
     default:
       return originalPoints;

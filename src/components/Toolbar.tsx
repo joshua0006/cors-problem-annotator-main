@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useRef } from "react";
 import {
   TOOLS,
   COLORS,
@@ -16,9 +16,97 @@ const getOptionalShortcut = (tool: any): string | undefined => {
   return tool.shortcut as string | undefined;
 };
 
+// Helper function to dispatch annotation change event
+const dispatchAnnotationChangeEvent = (pageNumber: number = 1) => {
+  // Create the event
+  const event = new CustomEvent('annotationChanged', {
+    bubbles: true,
+    detail: { pageNumber, source: 'toolbar' }
+  });
+  
+  // First try to dispatch to the PDF container
+  const pdfContainer = document.querySelector('.pdf-container');
+  if (pdfContainer) {
+    pdfContainer.dispatchEvent(event);
+    console.log('[Toolbar] Dispatched annotationChanged event to PDF container');
+  }
+  
+  // Also try to dispatch directly to annotation canvas
+  const annotationCanvas = document.querySelector('.annotation-canvas-container canvas') as HTMLCanvasElement;
+  if (annotationCanvas) {
+    annotationCanvas.dataset.forceRender = 'true';
+    annotationCanvas.dispatchEvent(event);
+    console.log('[Toolbar] Set forceRender flag on annotation canvas');
+  }
+  
+  // Set the tool change indicator
+  const toolChangeIndicator = document.getElementById('tool-change-indicator') as HTMLDivElement;
+  if (toolChangeIndicator) {
+    toolChangeIndicator.dataset.toolChanged = 'true';
+    console.log('[Toolbar] Set toolChanged flag on indicator');
+  }
+};
+
 export const Toolbar = () => {
   const { setIsShortcutGuideOpen } = useKeyboardShortcutGuide();
-  const { currentStyle, setCurrentStyle } = useAnnotationStore();
+  const { 
+    currentStyle, 
+    setCurrentStyle, 
+    currentTool, 
+    setCurrentTool,
+    currentDocumentId,
+    documents
+  } = useAnnotationStore();
+  
+  // Get current page number from the DOM if available
+  const getCurrentPageNumber = (): number => {
+    const pageElement = document.querySelector('.page-number-display');
+    return pageElement ? parseInt(pageElement.textContent?.split('/')[0]?.trim() || '1') : 1;
+  };
+
+  // Keep track of the last time we dispatched an event to prevent too many renders
+  const lastDispatchTimeRef = useRef<number>(0);
+  const dispatchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Debounced dispatch function
+  const debouncedDispatch = () => {
+    // Clear any existing timeout
+    if (dispatchTimeoutRef.current) {
+      clearTimeout(dispatchTimeoutRef.current);
+    }
+    
+    // Don't dispatch more than once every 300ms
+    const now = Date.now();
+    const timeSinceLastDispatch = now - lastDispatchTimeRef.current;
+    
+    if (timeSinceLastDispatch < 300) {
+      // Schedule a dispatch after the debounce period
+      dispatchTimeoutRef.current = setTimeout(() => {
+        const currentPage = getCurrentPageNumber();
+        dispatchAnnotationChangeEvent(currentPage);
+        lastDispatchTimeRef.current = Date.now();
+      }, 300 - timeSinceLastDispatch);
+    } else {
+      // Dispatch immediately
+      const currentPage = getCurrentPageNumber();
+      dispatchAnnotationChangeEvent(currentPage);
+      lastDispatchTimeRef.current = now;
+    }
+  };
+
+  // Trigger re-render when tool changes, but debounced
+  useEffect(() => {
+    if (currentDocumentId) {
+      debouncedDispatch();
+    }
+    
+    // Cleanup
+    return () => {
+      if (dispatchTimeoutRef.current) {
+        clearTimeout(dispatchTimeoutRef.current);
+      }
+    };
+  }, [currentTool, currentStyle, currentDocumentId]);
 
   const renderStyleSection = () => (
     <div className="space-y-4 p-2">

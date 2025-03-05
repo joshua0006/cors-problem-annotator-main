@@ -1,9 +1,11 @@
-import React, { useRef, useState, useEffect, useCallback } from "react";
+import React, { useRef, useState, useEffect, useCallback, useMemo } from "react";
 import { AnnotationCanvas } from "./AnnotationCanvas";
 import { useAnnotationStore } from "../store/useAnnotationStore";
 import { PDFControls } from "./PDFViewer/PDFControls";
 import { usePDFDocument } from "../hooks/usePDFDocument";
 import { usePDFPage } from "../hooks/usePDFPage";
+import { PDFPageProxy } from "pdfjs-dist";
+import { Annotation, AnnotationType, Point } from "../types/annotation";
 import {
   createExportCanvas,
   exportToPNG,
@@ -19,11 +21,17 @@ import { useToast } from "../contexts/ToastContext";
 import { ChevronLeft, ChevronRight, Download, AlertTriangle, RefreshCw } from "lucide-react";
 import { KeyboardShortcutGuide } from "./KeyboardShortcutGuide";
 import { useKeyboardShortcutGuide } from "../hooks/useKeyboardShortcutGuide";
+import { jsPDF } from "jspdf";
 
 interface PDFViewerProps {
   file: File | string;
   documentId: string;
 }
+
+// Add these outside the component to persist between renders and track loads
+const alreadyRenderedFiles = new Map<string, Set<number>>();
+const fileLoadTimestamps = new Map<string, number>();
+let currentlyRenderingFile: string | null = null;
 
 // Function to determine if a PDF has mostly text (for better export strategy)
 async function isTextBasedPDF(pdfDocument: any) {
@@ -61,23 +69,44 @@ async function isTextBasedPDF(pdfDocument: any) {
 export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  
+  // Add missing refs
+  const renderTaskRef = useRef<any>(null);
+  const renderTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const renderLockRef = useRef<boolean>(false);
+  const renderCooldownActiveRef = useRef<boolean>(false);
+  const renderAttemptTimestampRef = useRef<number>(0);
+  const initializationStartedRef = useRef<boolean>(false);
+  
+  // State declarations
   const [currentPage, setCurrentPage] = useState(1);
-  const [scale, setScale] = useState(0.75);
   const [containerWidth, setContainerWidth] = useState(0);
   const [containerHeight, setContainerHeight] = useState(0);
   const [isExporting, setIsExporting] = useState(false);
   const [isRendering, setIsRendering] = useState(false);
-  const [autoFitApplied, setAutoFitApplied] = useState(false);
+  const [renderComplete, setRenderComplete] = useState<boolean>(false);
   const [renderAttempts, setRenderAttempts] = useState(0);
   const [renderError, setRenderError] = useState<Error | null>(null);
   const [isViewerReady, setIsViewerReady] = useState(false);
-  const renderTaskRef = useRef<any>(null);
-  const renderTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const { currentTool } = useAnnotationStore();
-  const store = useAnnotationStore();
-
+  const [hasStartedLoading, setHasStartedLoading] = useState(false);
+  const [scale, setScale] = useState(1.2);
+  const [pageChangeInProgress, setPageChangeInProgress] = useState(false);
+  const [pdfFile, setPdfFile] = useState<File | null>(null);
+  
+  // Track which pages have been rendered to prevent duplicates
+  const renderedPagesRef = useRef<Set<number>>(new Set());
+  const initialRenderCompletedRef = useRef<boolean>(false);
+  const disableFitToWidthRef = useRef<boolean>(false);
+  const hasRenderedOnceRef = useRef<{[pageNum: number]: boolean}>({});
+  
+  // Track page changes to prevent multiple renders
+  const lastRenderedPageRef = useRef<number>(0);
+  
   const { showToast } = useToast();
-
+  const annotationStore = useAnnotationStore();
+  
+  const { currentTool } = useAnnotationStore();
+  
   const [importStatus, setImportStatus] = useState<{
     loading: boolean;
     error: string | null;
@@ -89,292 +118,511 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
   const { isShortcutGuideOpen, setIsShortcutGuideOpen } =
     useKeyboardShortcutGuide();
 
-  // Convert string URL to File object if needed
-  useEffect(() => {
-    const loadPdfFromUrl = async (url: string) => {
-      try {
-        setIsRendering(true);
-        setRenderError(null);
-        console.log('Loading PDF from URL:', url);
-        
-        // Support both relative and absolute URLs
-        const fullUrl = url.startsWith('http') ? url : new URL(url, window.location.href).toString();
-        
-        // First try with default mode
-        try {
-          const response = await fetch(fullUrl, {
-            method: 'GET',
-            headers: {
-              'Content-Type': 'application/pdf',
-              'Cache-Control': 'no-cache',
-            },
-          });
-          
-          if (!response.ok) {
-            throw new Error(`Failed to fetch PDF: ${response.status} ${response.statusText}`);
-          }
-          
-          const blob = await response.blob();
-          const fileName = url.split('/').pop() || "document.pdf";
-          const file = new File([blob], fileName, { type: "application/pdf" });
-          
-          if (file.size === 0) {
-            throw new Error("Downloaded PDF is empty (0 bytes)");
-          }
-          
-          console.log('Successfully loaded PDF from URL, file size:', file.size);
-          setPdfFile(file);
-        } catch (error) {
-          console.warn("First fetch attempt failed, trying with CORS mode:", error);
-          
-          // Fallback to explicit cors mode
-          const response = await fetch(fullUrl, {
-            method: 'GET',
-            headers: {
-              'Content-Type': 'application/pdf',
-              'Cache-Control': 'no-cache',
-            },
-            mode: 'cors',
-          });
-          
-          if (!response.ok) {
-            throw new Error(`Failed to fetch PDF: ${response.status} ${response.statusText}`);
-          }
-          
-          const blob = await response.blob();
-          const fileName = url.split('/').pop() || "document.pdf";
-          const file = new File([blob], fileName, { type: "application/pdf" });
-          
-          if (file.size === 0) {
-            throw new Error("Downloaded PDF is empty (0 bytes)");
-          }
-          
-          console.log('Successfully loaded PDF from URL with CORS mode, file size:', file.size);
-          setPdfFile(file);
-        }
-      } catch (error) {
-        console.error("Failed to load PDF from URL:", error);
-        setRenderError(error instanceof Error ? error : new Error(`Failed to load PDF: ${error}`));
-        showToast(`Failed to load PDF: ${(error as Error).message}`, "error");
-      } finally {
-        setIsRendering(false);
-      }
-    };
-    
-    if (typeof file === "string") {
-      loadPdfFromUrl(file);
-    } else if (file instanceof File) {
-      if (file.size === 0) {
-        setRenderError(new Error("PDF file is empty (0 bytes)"));
-        showToast("PDF file is empty or invalid", "error");
-      } else {
-        console.log('Loading PDF from File object, name:', file.name, 'size:', file.size);
-        setRenderError(null);
-        setPdfFile(file);
-      }
+  // Add this state variable at the top with other state declarations
+  const [currentAnnotations, setCurrentAnnotations] = useState<any[]>([]);
+
+  // Early file identification
+  const fileId = useMemo(() => {
+    if (!file) {
+      return "empty_file";
     }
+    return typeof file === 'string' ? file : `${file.name}_${file.size}_${file.lastModified}`;
   }, [file]);
 
-  const [pdfFile, setPdfFile] = useState<File | null>(null);
+  // PDF document and page hooks
   const { pdf, error: pdfError, isLoading: isPdfLoading } = usePDFDocument(pdfFile);
   const { page, error: pageError, isLoading: isPageLoading } = usePDFPage(pdf, currentPage, scale);
 
-  // Log PDF info once it's loaded
-  useEffect(() => {
-    if (pdf) {
-      console.log(`PDF loaded: ${pdf.numPages} pages`);
-      setIsViewerReady(true);
-    } else {
-      setIsViewerReady(false);
-    }
-  }, [pdf]);
+  // Get viewport dimensions for the current page
+  const viewport = useMemo(() => {
+    if (!page) return { width: 800, height: 600 };
+    return page.getViewport({ scale });
+  }, [page, scale]);
 
-  // Add error handling display
-  useEffect(() => {
-    if (pdfError) {
-      console.error('PDF document error:', pdfError);
-      setRenderError(pdfError);
-      showToast(`Failed to load PDF document: ${pdfError.message}`, "error");
+  // Function to center the document in the view
+  const scrollToCenterDocument = useCallback(() => {
+    if (!containerRef.current || !page) return;
+    
+    const container = containerRef.current;
+    const scrollContainer = container.querySelector('.overflow-auto');
+    if (!scrollContainer) return;
+    
+    // Calculate center position
+    const viewportWidth = scrollContainer.clientWidth;
+    const viewportHeight = scrollContainer.clientHeight;
+    const contentWidth = viewport.width;
+    const contentHeight = viewport.height;
+    
+    // Calculate scroll positions
+    const scrollLeft = Math.max(0, (contentWidth - viewportWidth) / 2);
+    const scrollTop = Math.max(0, (contentHeight - viewportHeight) / 2);
+    
+    // Scroll to center
+    scrollContainer.scrollLeft = scrollLeft;
+    scrollContainer.scrollTop = scrollTop;
+    
+    console.log(`[PDFViewer] Centered document: scrollLeft=${scrollLeft}, scrollTop=${scrollTop}`);
+  }, [page, viewport]);
+
+  // Helper function to get annotations for a specific page
+  const getAnnotationsForPage = useCallback((documentId: string, pageNumber: number) => {
+    // Get all annotations for the document
+    const documentAnnotations = annotationStore.documents[documentId]?.annotations || [];
+    
+    // Filter annotations for this specific page
+    return documentAnnotations.filter(annotation => annotation.pageNumber === pageNumber);
+  }, [annotationStore.documents]);
+
+  // Update the navigation handlers
+  const handlePrevPage = useCallback(() => {
+    // Don't allow navigation while exporting
+    if (isExporting) {
+      console.log('[PDFViewer] Navigation ignored - export in progress');
+      return;
     }
     
-    if (pageError) {
-      console.error('PDF page error:', pageError);
-      showToast(`Failed to load page ${currentPage}: ${pageError.message}`, "error");
-    }
-  }, [pdfError, pageError, currentPage]);
-
-  const renderPdfPage = useCallback(() => {
-    if (!page || !canvasRef.current) {
-      console.log('Cannot render: page or canvas not ready');
-      return false;
+    // Check if we can navigate to the previous page
+    const prevPage = Math.max(currentPage - 1, 1);
+    if (prevPage === currentPage) {
+      return; // Already on first page
     }
     
-    // Cancel any in-progress rendering
+    // If we're currently changing pages or rendering, we'll queue this navigation
+    if (pageChangeInProgress || isRendering) {
+      // If page change is already in progress but seems stuck, force clear it
+      if (pageChangeInProgress) {
+        const timeSinceLastChange = Date.now() - renderAttemptTimestampRef.current;
+        if (timeSinceLastChange > 2000) { // If it's been stuck for more than 2 seconds
+          console.log('[PDFViewer] Forcing navigation despite page change in progress');
+          // Cancel any current render
+          if (renderTaskRef.current) {
+            try {
+              renderTaskRef.current.cancel();
+              renderTaskRef.current = null;
+            } catch (error) {
+              console.error('[PDFViewer] Error cancelling render task:', error);
+            }
+          }
+          renderLockRef.current = false;
+        } else {
+          console.log('[PDFViewer] Navigation ignored - page change already in progress');
+          return;
+        }
+      } else {
+        console.log('[PDFViewer] Navigation ignored - rendering in progress');
+        return;
+      }
+    }
+    
+    console.log('[PDFViewer] Navigating to previous page:', prevPage);
+    
+    // Cancel any current render
     if (renderTaskRef.current) {
-      console.log('Cancelling existing render task');
-      renderTaskRef.current.cancel();
+      try {
+        renderTaskRef.current.cancel();
+      } catch (error) {
+        console.error('[PDFViewer] Error cancelling render task:', error);
+      }
       renderTaskRef.current = null;
     }
     
-    // Clear any pending timeouts
-    if (renderTimeoutRef.current) {
-      clearTimeout(renderTimeoutRef.current);
-      renderTimeoutRef.current = null;
-    }
+    // Track when we started this navigation attempt
+    renderAttemptTimestampRef.current = Date.now();
+    
+    // Clear render lock
+    renderLockRef.current = false;
+    
+    // Set flags to indicate page change is in progress
+    setPageChangeInProgress(true);
+    setIsRendering(false); // Reset any existing render state
+    
+    // Change the page
+    setCurrentPage(prevPage);
+  }, [currentPage, isExporting, pageChangeInProgress, isRendering]);
 
-    setIsRendering(true);
-    setRenderError(null);
-    console.log('Starting render for page', currentPage, 'with scale', scale, '(attempt:', renderAttempts + 1, ')');
-    
-    // Use the current scale with a slight boost to ensure crisp rendering
-    const renderScale = scale * 1.1; // Slight increase in scale for better rendering
-    const viewport = page.getViewport({ scale: renderScale });
-    const canvas = canvasRef.current;
-    
-    // Check if canvas dimensions are valid
-    if (viewport.width <= 0 || viewport.height <= 0) {
-      const error = new Error(`Invalid viewport dimensions: ${viewport.width}x${viewport.height}`);
-      console.error(error);
-      setRenderError(error);
-      setIsRendering(false);
-      return false;
+  const handleNextPage = useCallback(() => {
+    // Don't allow navigation while exporting
+    if (isExporting) {
+      console.log('[PDFViewer] Navigation ignored - export in progress');
+      return;
     }
     
-    const context = canvas.getContext("2d", { alpha: false, willReadFrequently: true });
-    if (!context) {
-      const error = new Error("Failed to get canvas context");
-      console.error(error);
-      setRenderError(error);
-      setIsRendering(false);
-      return false;
+    // Check if we can navigate to the next page
+    const nextPage = Math.min(currentPage + 1, pdf?.numPages || currentPage);
+    if (nextPage === currentPage) {
+      return; // Already on last page
     }
-
-    try {
-      // Clear canvas and set correct dimensions with a margin to prevent clipping
-      canvas.width = Math.ceil(viewport.width);
-      canvas.height = Math.ceil(viewport.height);
-      canvas.style.width = `${Math.ceil(viewport.width / 1.1)}px`; // Adjust back for display
-      canvas.style.height = `${Math.ceil(viewport.height / 1.1)}px`; // Adjust back for display
-      
-      // Set white background
-      context.fillStyle = "#FFFFFF";
-      context.fillRect(0, 0, canvas.width, canvas.height);
-
-      const renderContext = {
-        canvasContext: context,
-        viewport: viewport,
-        intent: 'display',
-      };
-
-      // Store the render task reference
-      const renderTask = page.render(renderContext);
-      renderTaskRef.current = renderTask;
-
-      renderTask.promise
-        .then(() => {
-          console.log('Render completed for page', currentPage);
-          setIsRendering(false);
-          setRenderAttempts(0); // Reset attempts counter on success
-          renderTaskRef.current = null;
-          setRenderError(null);
-        })
-        .catch((error) => {
-          if (error.message.includes('cancelled')) {
-            console.log('Render operation was cancelled');
-          } else {
-            console.error("Error rendering PDF page:", error);
-            setRenderError(error);
-            
-            // Auto-retry up to 3 times with increasing delays
-            if (renderAttempts < 3) {
-              const retryDelay = Math.pow(2, renderAttempts) * 500; // Exponential backoff
-              console.log(`Retrying render in ${retryDelay}ms (attempt ${renderAttempts + 1}/3)`);
-              
-              renderTimeoutRef.current = setTimeout(() => {
-                setRenderAttempts(prev => prev + 1);
-                renderPdfPage();
-              }, retryDelay);
-            } else {
-              showToast("Failed to render PDF after multiple attempts. Try refreshing the page.", "error");
+    
+    // If we're currently changing pages or rendering, we'll queue this navigation
+    if (pageChangeInProgress || isRendering) {
+      // If page change is already in progress but seems stuck, force clear it
+      if (pageChangeInProgress) {
+        const timeSinceLastChange = Date.now() - renderAttemptTimestampRef.current;
+        if (timeSinceLastChange > 2000) { // If it's been stuck for more than 2 seconds
+          console.log('[PDFViewer] Forcing navigation despite page change in progress');
+          // Cancel any current render
+          if (renderTaskRef.current) {
+            try {
+              renderTaskRef.current.cancel();
+              renderTaskRef.current = null;
+            } catch (error) {
+              console.error('[PDFViewer] Error cancelling render task:', error);
             }
           }
-          setIsRendering(false);
-          renderTaskRef.current = null;
-        });
-      
-      return true;
-    } catch (error) {
-      console.error("Exception during render setup:", error);
-      setRenderError(error instanceof Error ? error : new Error('Failed to set up render'));
-      setIsRendering(false);
-      return false;
-    }
-  }, [page, scale, currentPage, renderAttempts]);
-
-  // Modify the useEffect that handles PDF page rendering
-  useEffect(() => {
-    renderPdfPage();
-    // Return cleanup function if needed
-    return () => {
-      if (renderTaskRef.current) {
-        renderTaskRef.current.cancel();
-        renderTaskRef.current = null;
-      }
-    };
-  }, [renderPdfPage]);
-
-  // Add debouncing for resize handling
-  useEffect(() => {
-    const updateDimensions = () => {
-      if (containerRef.current) {
-        const newWidth = containerRef.current.clientWidth;
-        const newHeight = containerRef.current.clientHeight;
-        
-        // Only update if dimensions have actually changed
-        if (newWidth !== containerWidth || newHeight !== containerHeight) {
-          setContainerWidth(newWidth);
-          setContainerHeight(newHeight);
-          console.log(`Container dimensions updated: ${newWidth}x${newHeight}`);
+          renderLockRef.current = false;
+        } else {
+          console.log('[PDFViewer] Navigation ignored - page change already in progress');
+          return;
         }
+      } else {
+        console.log('[PDFViewer] Navigation ignored - rendering in progress');
+        return;
       }
-    };
+    }
     
-    // Debounced render function to avoid multiple rapid renders
-    const debouncedRender = () => {
-      if (isRendering || !page || !canvasRef.current) return;
-      renderPdfPage();
-    };
+    console.log('[PDFViewer] Navigating to next page:', nextPage);
+    
+    // Cancel any current render
+    if (renderTaskRef.current) {
+      try {
+        renderTaskRef.current.cancel();
+      } catch (error) {
+        console.error('[PDFViewer] Error cancelling render task:', error);
+      }
+      renderTaskRef.current = null;
+    }
+    
+    // Track when we started this navigation attempt
+    renderAttemptTimestampRef.current = Date.now();
+    
+    // Clear render lock
+    renderLockRef.current = false;
+    
+    // Set flags to indicate page change is in progress
+    setPageChangeInProgress(true);
+    setIsRendering(false); // Reset any existing render state
+    
+    // Change the page
+    setCurrentPage(nextPage);
+  }, [currentPage, pdf?.numPages, isExporting, pageChangeInProgress, isRendering]);
 
-    // Immediately update dimensions
-    updateDimensions();
-    
-    // Set up the resize handler with debouncing
-    let resizeTimer: NodeJS.Timeout;
-    const handleResize = () => {
-      updateDimensions();
-      clearTimeout(resizeTimer);
-      resizeTimer = setTimeout(debouncedRender, 100);
-    };
-    
-    window.addEventListener("resize", handleResize);
-    
-    return () => {
-      window.removeEventListener("resize", handleResize);
-      clearTimeout(resizeTimer);
-      
-      // Clean up any pending render tasks
+  // Add this at the top, right after refs
+  let hasLoggedRenderSkip = false;
+
+  // Update the renderPdfPage function to properly reset pageChangeInProgress
+  const renderPdfPage = useCallback(() => {
+    try {
+      // Skip if we're in the middle of a page change or the page is not properly set
+      if (!currentPage) {
+        return;
+      }
+
+      // Check if render lock is active, which prevents overlapping renders
+      if (renderLockRef.current) {
+        return;
+      }
+
+      // Skip if we don't have all the required elements
+      if (!canvasRef.current || !pdf || !fileId) {
+        // If we're in the middle of a page change but we don't have required elements,
+        // we should reset the flag to avoid getting stuck
+        if (pageChangeInProgress) {
+          console.log('[PDFViewer] Resetting page change state - missing required elements');
+          setPageChangeInProgress(false);
+        }
+        return;
+      }
+
+      // Get canvas context - if this fails, we can't render
+      const canvas = canvasRef.current;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        console.error('[PDFViewer] Failed to get canvas context');
+        setPageChangeInProgress(false); // Reset page change state if we can't get context
+        return;
+      }
+
+      // Cancel any in-progress render tasks
       if (renderTaskRef.current) {
         renderTaskRef.current.cancel();
         renderTaskRef.current = null;
       }
+
+      // Set render lock to prevent overlapping renders
+      renderLockRef.current = true;
       
-      // Clean up any retry timeouts
-      if (renderTimeoutRef.current) {
-        clearTimeout(renderTimeoutRef.current);
-        renderTimeoutRef.current = null;
+      // Set state to indicate rendering is in progress
+      setIsRendering(true);
+      
+      // Log only when starting a new render (not for retries)
+      console.log(`[PDFViewer] Rendering page ${currentPage}`);
+
+      // Get the PDF page
+      pdf.getPage(currentPage).then(
+        (page) => {
+          try {
+            // Set up viewport
+            let viewport = page.getViewport({ scale: 1 });
+            const containerWidth = containerRef.current?.clientWidth || 800;
+            const containerHeight = containerRef.current?.clientHeight || 1200;
+            
+            // Calculate scale to fit the container
+            const widthScale = containerWidth / viewport.width;
+            const heightScale = containerHeight / viewport.height;
+            const scale = Math.min(widthScale, heightScale) * 0.95;
+            
+            viewport = page.getViewport({ scale });
+
+            // Set canvas dimensions
+            canvas.height = viewport.height;
+            canvas.width = viewport.width;
+
+            // Define render parameters
+            const renderContext = {
+              canvasContext: ctx,
+              viewport: viewport,
+            };
+
+            // Start the render task
+            renderTaskRef.current = page.render(renderContext);
+            
+            // Handle successful render
+            renderTaskRef.current.promise.then(
+              () => {
+                // Reset render lock
+                renderLockRef.current = false;
+                
+                // Get annotations for the current page
+                let annotations: any[] = [];
+                try {
+                  // Check if documentId and current page are available
+                  if (documentId && currentPage) {
+                    // Get annotations from the document annotations for this page
+                    annotations = annotationStore.documents[documentId]?.annotations?.filter(
+                      (a: any) => a.pageNumber === currentPage
+                    ) || [];
+                  }
+                } catch (err) {
+                  console.warn('[PDFViewer] Error accessing annotations:', err);
+                }
+                
+                // Trigger annotation rendering if needed
+                setCurrentAnnotations(annotations);
+                
+                // Dispatch annotation rendering event
+                document.dispatchEvent(
+                  new CustomEvent('renderAnnotations', {
+                    detail: { 
+                      pageNumber: currentPage,
+                      annotations 
+                    },
+                  })
+                );
+                
+                // Mark this page as rendered
+                if (!hasRenderedOnceRef.current[currentPage]) {
+                  hasRenderedOnceRef.current[currentPage] = true;
+                }
+                renderedPagesRef.current.add(currentPage);
+                if (alreadyRenderedFiles.has(fileId)) {
+                  alreadyRenderedFiles.get(fileId)?.add(currentPage);
+                }
+                
+                // Page change and rendering are complete
+                setPageChangeInProgress(false);
+                setIsRendering(false);
+                setRenderComplete(true);
+                
+                // Center the document after a brief delay to ensure UI is updated
+                setTimeout(() => {
+                  scrollToCenterDocument();
+                }, 50);
+              },
+              (error: Error) => {
+                // Handle render failure
+                console.error(`[PDFViewer] Error rendering page ${currentPage}:`, error);
+                
+                // Reset all state flags on error
+                renderLockRef.current = false;
+                setIsRendering(false);
+                setPageChangeInProgress(false);
+                
+                // Clear any previous timeout
+                if (renderTimeoutRef.current) {
+                  clearTimeout(renderTimeoutRef.current);
+                  renderTimeoutRef.current = null;
+                }
+              }
+            );
+          } catch (err) {
+            console.error('[PDFViewer] Error setting up render:', err);
+            renderLockRef.current = false;
+            setIsRendering(false);
+            setPageChangeInProgress(false);
+          }
+        },
+        (error) => {
+          console.error(`[PDFViewer] Failed to get page ${currentPage}:`, error);
+          renderLockRef.current = false;
+          setIsRendering(false);
+          setPageChangeInProgress(false);
+        }
+      );
+    } catch (err) {
+      console.error('[PDFViewer] Exception during render:', err);
+      renderLockRef.current = false;
+      setIsRendering(false);
+      setPageChangeInProgress(false);
+    }
+  }, [pdf, currentPage, fileId, pageChangeInProgress, setIsRendering, annotationStore, setCurrentAnnotations, documentId, scrollToCenterDocument, setRenderComplete]);
+
+  // Update the useEffect for page changes
+  useEffect(() => {
+    // Skip if we don't have a valid page or file
+    if (!currentPage || !pdf || !fileId) {
+      return;
+    }
+    
+    // Check if PDF document is still valid
+    if (!pdf.numPages) {
+      console.error('[PDFViewer] PDF document is no longer valid');
+      setPageChangeInProgress(false); // Clear page change state if PDF is invalid
+      return;
+    }
+    
+    // Set a timeout to force clear the page change flag if it gets stuck
+    const pageChangeTimeout = setTimeout(() => {
+      if (pageChangeInProgress) {
+        console.log('[PDFViewer] Force clearing page change state after timeout');
+        setPageChangeInProgress(false);
       }
+    }, 5000); // 5 second safety timeout
+    
+    // Always attempt to render when the page changes
+    if (pageChangeInProgress) {
+      console.log(`[PDFViewer] Page change detected to page ${currentPage}, starting render`);
+      
+      // Reset render tracking state for the new page to force a fresh render
+      hasRenderedOnceRef.current[currentPage] = false;
+      renderedPagesRef.current.delete(currentPage);
+      
+      // Allow a small delay for the page change state to take effect before rendering
+      setTimeout(() => {
+        // Start the render process
+        renderPdfPage();
+      }, 50);
+    }
+    
+    return () => {
+      // Clean up the safety timeout when the effect is cleaned up
+      clearTimeout(pageChangeTimeout);
     };
-  }, [page, renderPdfPage, isRendering, containerWidth, containerHeight]);
+  }, [currentPage, pdf, fileId, pageChangeInProgress, renderPdfPage]);
+
+  // Update the useEffect for rendering the PDF page
+  useEffect(() => {
+    // Skip if there's no valid page to render or necessary components
+    if (!page || !canvasRef.current || !fileId || !pdf) {
+      return;
+    }
+    
+    // If we were navigating to this page, the dedicated page change effect will handle it
+    if (pageChangeInProgress) {
+      return;
+    }
+    
+    // Don't render if there's an active render
+    if (isRendering || renderLockRef.current) {
+      console.log("[PDFViewer] Skipping render - already in progress");
+      return;
+    }
+    
+    // Check for annotation-only updates from AnnotationCanvas
+    const annotationCanvas = document.querySelector('.annotation-canvas-container canvas') as HTMLCanvasElement;
+    const isAnnotationUpdate = annotationCanvas?.dataset?.forceRender === 'true';
+    
+    // Only skip rendering if this isn't an annotation update and the page has already been rendered
+    if (!isAnnotationUpdate && 
+        hasRenderedOnceRef.current[currentPage] && 
+        (renderedPagesRef.current.has(currentPage) || 
+          alreadyRenderedFiles.get(fileId)?.has(currentPage))) {
+      
+      // Ensure state is set correctly
+      setRenderComplete(true);
+      setIsRendering(false);
+      
+      // Make sure the page is centered
+      setTimeout(() => {
+        scrollToCenterDocument();
+      }, 100);
+      
+      return;
+    }
+    
+    // Start the rendering process
+    setIsRendering(true);
+    
+    // Log rendering reason
+    if (isAnnotationUpdate) {
+      console.log(`[PDFViewer] Rendering page ${currentPage} for annotation update`);
+    } else {
+      console.log(`[PDFViewer] Rendering page ${currentPage} (initial or forced render)`);
+    }
+    
+    // Initialize file tracking if needed
+    if (!alreadyRenderedFiles.has(fileId)) {
+      alreadyRenderedFiles.set(fileId, new Set());
+    }
+    
+    // Render the PDF page
+    renderPdfPage();
+  }, [page, canvasRef, renderPdfPage, isRendering, pageChangeInProgress, fileId, pdf, currentPage, scrollToCenterDocument]);
+
+  // Mark viewer as ready when the PDF is loaded
+  useEffect(() => {
+    if (!pdf) {
+      setIsViewerReady(false);
+      return;
+    }
+    
+    console.log(`[PDFViewer] PDF document loaded with ${pdf.numPages} pages`);
+    
+    // Mark the viewer as ready
+    setIsViewerReady(true);
+    
+    // Reset render state to ensure first page renders properly
+    setRenderComplete(false);
+    setIsRendering(false);
+    
+  }, [pdf]);
+
+  // Setup container dimensions
+  useEffect(() => {
+    if (!containerRef.current) return;
+    
+    const updateContainerSize = () => {
+      const container = containerRef.current;
+      if (!container) return;
+      
+      const { width, height } = container.getBoundingClientRect();
+      setContainerWidth(width);
+      setContainerHeight(height);
+    };
+    
+    // Initial size
+    updateContainerSize();
+    
+    // Update on resize
+    const resizeObserver = new ResizeObserver(updateContainerSize);
+    resizeObserver.observe(containerRef.current);
+    
+    return () => {
+      if (containerRef.current) {
+        resizeObserver.unobserve(containerRef.current);
+      }
+      resizeObserver.disconnect();
+    };
+  }, []);
 
   // Add keyboard shortcuts with documentId and current page
   useKeyboardShortcuts(documentId, currentPage);
@@ -402,536 +650,723 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
     container.style.cursor = cursorMap[currentTool] || "default";
   }, [currentTool]);
 
-  // Add function to fit the PDF to the container width
-  const fitToWidth = useCallback(() => {
-    if (!page || !containerRef.current || isRendering) return;
-    
-    // Get the original viewport to determine the PDF's native dimensions
-    const originalViewport = page.getViewport({ scale: 1.0 });
-    
-    // Calculate the scale needed to fit the width
-    const containerWidth = containerRef.current.clientWidth;
-    
-    // Increased padding to ensure content isn't cropped at edges
-    // Using a larger minimum padding of 60px instead of 40px
-    const padding = Math.max(60, containerWidth * 0.08); // 8% of container width or at least 60px
-    const targetWidth = containerWidth - padding;
-    
-    // Calculate new scale with constraints to avoid extreme scaling
-    let newScale = targetWidth / originalViewport.width;
-    
-    // Ensure scale is within reasonable bounds for readability
-    // Increased minimum scale from 0.5 to 0.6 for better visibility
-    newScale = Math.max(0.6, Math.min(newScale, 2.0));
-    
-    console.log('Fitting PDF to width. Container:', containerWidth, 'Scale:', newScale.toFixed(2));
-    
-    setScale(newScale);
-    return newScale;
-  }, [page, isRendering]);
-
-  // Function to center the document in the viewport
-  const scrollToCenterDocument = useCallback(() => {
-    if (!containerRef.current || !page) return;
-    
-    const container = containerRef.current.querySelector('.overflow-auto');
-    if (container) {
-      // Get container dimensions
-      const containerRect = container.getBoundingClientRect();
-      
-      // Get content dimensions
-      const content = container.querySelector('.pdf-viewer-container');
-      if (content) {
-        const contentRect = content.getBoundingClientRect();
-        
-        // Calculate center positions
-        const scrollToX = (contentRect.width - containerRect.width) / 2;
-        const scrollToY = (contentRect.height - containerRect.height) / 2;
-        
-        // Scroll container to center the content
-        container.scrollTo({
-          left: Math.max(0, scrollToX),
-          top: Math.max(0, scrollToY),
-          behavior: 'smooth'
-        });
-        
-        console.log('Centered document in view');
-      }
-    }
-  }, [page]);
-
-  // Add an effect to measure container dimensions when mounted
-  useEffect(() => {
-    if (containerRef.current) {
-      const updateDimensions = () => {
-        setContainerWidth(containerRef.current?.clientWidth || 0);
-        setContainerHeight(containerRef.current?.clientHeight || 0);
-      };
-      
-      updateDimensions();
-      
-      // Also update dimensions when window is resized
-      window.addEventListener('resize', updateDimensions);
-      return () => window.removeEventListener('resize', updateDimensions);
-    }
-  }, []);
-
-  // Auto-fit when PDF page is loaded
-  useEffect(() => {
-    if (page && containerRef.current && containerWidth > 0 && !autoFitApplied) {
-      // Short delay to ensure the container has been properly measured
-      const timer = setTimeout(() => {
-        fitToWidth();
-        setAutoFitApplied(true);
-        
-        // Add additional delay before centering to let render complete
-        setTimeout(() => {
-          scrollToCenterDocument();
-          console.log('Auto-centered PDF after fit-to-width');
-        }, 300);
-        
-        console.log('Auto-fitted PDF to width on load');
-      }, 200); // Increased delay from 100ms to 200ms for more reliable sizing
-      
-      return () => clearTimeout(timer);
-    }
-  }, [page, containerRef, containerWidth, fitToWidth, autoFitApplied, scrollToCenterDocument]);
-
-  // Reset auto-fit flag when PDF changes
-  useEffect(() => {
-    if (pdfFile) {
-      setAutoFitApplied(false);
-      setRenderAttempts(0);
-      console.log('New PDF loaded, will auto-fit when ready');
-    }
-  }, [pdfFile]);
-
-  // Function to handle manual retry of rendering
-  const handleRetryRender = useCallback(() => {
-    setRenderAttempts(0);
-    setRenderError(null);
-    
-    // For URL-based PDFs, we might need to reload the file
-    if (typeof file === "string") {
-      console.log("Reloading PDF from URL");
-      
-      // Create a new URL object with a cache-busting parameter
-      const timestamp = Date.now();
-      const url = file.includes('?') 
-        ? `${file}&cacheBust=${timestamp}` 
-        : `${file}?cacheBust=${timestamp}`;
-        
-      // Load the PDF again with cache-busting
-      const loadPdfFromUrl = async () => {
-        try {
-          setIsRendering(true);
-          const response = await fetch(url, {
-            method: 'GET',
-            headers: {
-              'Content-Type': 'application/pdf',
-              'Cache-Control': 'no-cache, no-store, must-revalidate',
-            },
-            mode: 'cors',
-          });
-          
-          if (!response.ok) {
-            throw new Error(`Failed to fetch PDF: ${response.status} ${response.statusText}`);
-          }
-          
-          const blob = await response.blob();
-          const fileName = url.split('/').pop()?.split('?')[0] || "document.pdf";
-          const newFile = new File([blob], fileName, { type: "application/pdf" });
-          setPdfFile(newFile);
-        } catch (error) {
-          console.error("Failed to reload PDF:", error);
-          setRenderError(error instanceof Error ? error : new Error(`Failed to reload PDF: ${error}`));
-          showToast(`Failed to reload PDF: ${(error as Error).message}`, "error");
-        } finally {
-          setIsRendering(false);
-        }
-      };
-      
-      loadPdfFromUrl();
-    } else {
-      // For File objects, just try rendering again
-      renderPdfPage();
-    }
-  }, [file, renderPdfPage]);
-
-  const exportAllPages = async () => {
-    if (!pdf) return;
-    
-    // Ensure we're not already exporting or rendering
-    if (isExporting || isRendering) {
-      showToast("Another operation is in progress. Please wait...", "error");
-      return;
-    }
-    
-    setIsExporting(true);
-    showToast("Preparing PDF for download...", "success");
-
-    try {
-      // Cancel any existing render tasks
-      if (renderTaskRef.current) {
-        renderTaskRef.current.cancel();
-        renderTaskRef.current = null;
-      }
-      
-      // Store the current visible scale for consistent export
-      const currentViewScale = scale;
-      console.log(`Exporting PDF with scale: ${currentViewScale.toFixed(2)}`);
-      
-      // Get the first page to determine original dimensions
-      const firstPage = await pdf.getPage(1);
-      const originalViewport = firstPage.getViewport({ scale: 1.0 });
-      
-      // Determine whether this is a text-heavy PDF 
-      const isTextBased = await isTextBasedPDF(pdf);
-      
-      // Use original PDF dimensions and format for better quality
-      const { jsPDF } = await import("jspdf");
-      const doc = new jsPDF({
-        orientation: originalViewport.width > originalViewport.height ? "landscape" : "portrait",
-        unit: "pt", // Use points for more precise sizing
-        format: [originalViewport.width, originalViewport.height],
-        compress: true, // Enable compression for smaller file size
-      });
-
-      // Set PDF metadata
-      doc.setProperties({
-        title: `Annotated Document - ${documentId}`,
-        subject: "Document with annotations",
-        creator: "CORS Problem Annotator",
-        author: "CORS Problem Annotator User",
-        keywords: "annotated, pdf, cors-problem-annotator"
-      });
-
-      // Track progress
-      let processedPages = 0;
-      const totalPages = pdf.numPages;
-
-      // Get document annotations
-      const documentAnnotations = store.documents[documentId]?.annotations || [];
-
-      // Use the same scale as currently displayed in the viewer for consistent results
-      // Just slightly higher resolution for better quality output
-      const renderScale = currentViewScale * 1.2;
-      
-      // Process pages in smaller batches to manage memory better
-      const BATCH_SIZE = 2;
-      
-      showToast("Rendering PDF exactly as shown in the viewer...", "success");
-      
-      for (let batchStart = 1; batchStart <= totalPages; batchStart += BATCH_SIZE) {
-        const batchEnd = Math.min(batchStart + BATCH_SIZE - 1, totalPages);
-        
-        // Process each batch of pages
-        for (let pageNum = batchStart; pageNum <= batchEnd; pageNum++) {
-          try {
-            showToast(`Processing page ${pageNum} of ${totalPages}...`, "success");
-            
-            // Create temporary canvas for each page
-            const tempCanvas = document.createElement("canvas");
-            const page = await pdf.getPage(pageNum);
-            
-            // Use the same viewport calculation as the viewer
-            const viewport = page.getViewport({ scale: renderScale });
-            tempCanvas.width = viewport.width;
-            tempCanvas.height = viewport.height;
-            const ctx = tempCanvas.getContext("2d", { alpha: false })!;
-            
-            // Set white background to avoid transparency issues
-            ctx.fillStyle = "white";
-            ctx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
-
-            // Render PDF page
-            await page.render({
-              canvasContext: ctx,
-              viewport,
-              intent: "display"
-            }).promise;
-
-            // Filter annotations for this page
-            const pageAnnotations = documentAnnotations.filter(
-              (a: any) => a.pageNumber === pageNum
-            );
-            
-            // Draw annotations with standard method (same as viewer)
-            pageAnnotations.forEach((annotation: any) => {
-              try {
-                drawAnnotation(ctx, annotation, renderScale);
-              } catch (drawError) {
-                console.error(`Error drawing annotation:`, drawError);
-              }
-            });
-
-            // Add page to PDF (first page is added automatically)
-            if (pageNum > 1) {
-              doc.addPage([originalViewport.width, originalViewport.height]);
-            }
-
-            // Use PNG format for better quality
-            const imgData = tempCanvas.toDataURL("image/png", 1.0);
-            
-            // Calculate proper scaling ratio to maintain the view ratio
-            const scaleRatio = originalViewport.width / viewport.width;
-            const scaledHeight = viewport.height * scaleRatio;
-            
-            // Center the content if needed
-            const yOffset = Math.max(0, (originalViewport.height - scaledHeight) / 2);
-            
-            // Add image to PDF
-            doc.addImage(
-              imgData,
-              "PNG",
-              0,
-              yOffset,
-              originalViewport.width,
-              scaledHeight,
-              undefined,
-              'FAST'
-            );
-
-            // Clean up resources
-            processedPages++;
-            page.cleanup();
-            tempCanvas.width = 0;
-            tempCanvas.height = 0;
-            
-          } catch (pageError) {
-            console.error(`Error processing page ${pageNum}:`, pageError);
-            showToast(`Error on page ${pageNum}. Continuing...`, "error");
-          }
-        }
-        
-        // Add a small delay between batches to allow garbage collection
-        await new Promise(resolve => setTimeout(resolve, 200));
-      }
-
-      showToast("Finalizing PDF...", "success");
-      
-      // Generate filename based on documentId with date
-      const today = new Date();
-      const dateString = today.toISOString().split('T')[0]; // YYYY-MM-DD
-      const filename = `annotated-${documentId}-${dateString}.pdf`;
-      
-      doc.save(filename);
-      showToast("PDF downloaded successfully!", "success");
-    } catch (error) {
-      console.error("Error exporting PDF:", error);
-      showToast("Failed to download PDF. Please try again.", "error");
-    } finally {
-      setIsExporting(false);
-    }
-  };
-
-  // Enhanced drawing function for improved visibility of complex shapes
-  function drawAnnotationWithEnhancedVisibility(ctx: CanvasRenderingContext2D, annotation: any, scale: number) {
-    if (!ctx || !annotation || !annotation.style) {
-      console.warn('Invalid parameters for drawAnnotationWithEnhancedVisibility', { 
-        hasCtx: !!ctx, 
-        hasAnnotation: !!annotation,
-        hasStyle: !!(annotation && annotation.style)
-      });
+  // Export current page with annotations
+  const handleExportCurrentPage = useCallback(async (format: "png" | "pdf" = "pdf") => {
+    if (!page || !canvasRef.current || !viewport) {
+      showToast("Cannot export - PDF not fully loaded", "error");
       return;
     }
     
     try {
-      // Store original line width
-      const originalLineWidth = annotation.style.lineWidth || 1;
+      setIsExporting(true);
       
-      // Create a temporary modified annotation with increased visibility
-      // but without shadow effects
-      const enhancedAnnotation = {
-        ...annotation,
-        style: {
-          ...annotation.style,
-          lineWidth: Math.max(2, originalLineWidth * 1.5), // Use slightly thicker lines
-          opacity: 1.0 // Full opacity for complex shapes
-        }
-      };
+      // Get annotations for the current page from store
+      const currentDoc = document ? useAnnotationStore.getState().documents[documentId] : null;
+      const pageAnnotations = currentDoc?.annotations?.filter(
+        a => a.pageNumber === currentPage
+      ) || [];
       
-      // Draw the annotation without shadows, just once with enhanced line width
-      drawAnnotation(ctx, enhancedAnnotation, scale);
-    } catch (error) {
-      console.error('Error in drawAnnotationWithEnhancedVisibility:', error);
-    }
-  }
-
-  const handleZoomIn = () => {
-    if (isRendering || isExporting) return;
-    setScale((prev) => Math.min(prev + 0.1, 3));
-  };
-  
-  const handleZoomOut = () => {
-    if (isRendering || isExporting) return;
-    setScale((prev) => Math.max(prev - 0.1, 0.5));
-  };
-  
-  const handleZoomReset = () => {
-    if (isRendering || isExporting) return;
-    setScale(1.0); // Reset to 100%
-  };
-  
-  const handleNextPage = () => {
-    if (isRendering || isExporting) return;
-    setCurrentPage((p) => Math.min(p + 1, pdf?.numPages || p));
-  };
-  
-  const handlePrevPage = () => {
-    if (isRendering || isExporting) return;
-    setCurrentPage((p) => Math.max(p - 1, 1));
-  };
-
-  const handleExportCurrentPage = async (format: "png" | "pdf") => {
-    if (!page || !canvasRef.current) return;
-    
-    // Prevent export if another operation is in progress
-    if (isExporting || isRendering) {
-      showToast("Another operation is in progress. Please wait...", "error");
-      return;
-    }
-    
-    setIsExporting(true);
-    
-    try {
-      // Cancel any existing render tasks
-      if (renderTaskRef.current) {
-        renderTaskRef.current.cancel();
-        renderTaskRef.current = null;
-      }
-
-      const documentAnnotations = store.documents[documentId]?.annotations || [];
-      const pageAnnotations = documentAnnotations.filter(
-        (a: any) => a.pageNumber === currentPage
-      );
+      console.log(`[PDFViewer] Exporting page ${currentPage} with ${pageAnnotations.length} annotations`);
       
-      const { canvas, viewport } = await createExportCanvas(
-        page,
-        scale,
+      // Create a canvas with both PDF and annotations
+      const exportCanvas = await createExportCanvas(
+        page, 
+        scale, 
         pageAnnotations
       );
 
-      if (format === "png") {
-        exportToPNG(canvas, currentPage);
-        showToast("PNG image downloaded successfully!", "success");
+      // Ensure annotations are drawn at the correct scale
+      if (pageAnnotations.length > 0) {
+        const ctx = exportCanvas.canvas.getContext('2d');
+        if (ctx) {
+          // Draw annotations on top of the PDF content
+          pageAnnotations.forEach(annotation => {
+            try {
+              drawAnnotation(ctx, annotation, scale);
+            } catch (error) {
+              console.error("Error drawing annotation for export:", error, annotation);
+            }
+          });
+        }
+      }
+      
+      if (format === "pdf") {
+        // Export to PDF with correct dimensions
+        exportToPDF(
+          exportCanvas.canvas, 
+          { width: viewport.width, height: viewport.height },
+          currentPage
+        );
+        showToast("PDF exported successfully with annotations", "success");
       } else {
-        await exportToPDF(canvas, viewport, currentPage);
-        showToast("PDF page downloaded successfully!", "success");
+        // Export to PNG
+        exportToPNG(exportCanvas.canvas, currentPage);
+        showToast("PNG exported successfully with annotations", "success");
       }
     } catch (error) {
-      console.error(`Error exporting page as ${format}:`, error);
-      showToast(`Failed to export as ${format}. Please try again.`, "error");
+      console.error("Export error:", error);
+      showToast(`Export failed: ${error instanceof Error ? error.message : 'Unknown error'}`, "error");
     } finally {
       setIsExporting(false);
     }
-  };
-
-  const handleExportAnnotations = () => {
-    const documentAnnotations = store.documents[documentId]?.annotations || [];
-    exportAnnotations(documentAnnotations, documentId);
-  };
-
-  const handleImportAnnotations = async (file: File) => {
-    setImportStatus({ loading: true, error: null });
+  }, [page, canvasRef, viewport, scale, currentPage, document, documentId, showToast]);
+  
+  // Export all annotations as JSON
+  const handleExportAnnotations = useCallback(() => {
     try {
-      const importedAnnotations = await importAnnotations(file);
-      useAnnotationStore
-        .getState()
-        .importAnnotations(documentId, importedAnnotations);
-      setImportStatus({ loading: false, error: null });
+      // Get all annotations for the current document from store
+      const currentDoc = document ? useAnnotationStore.getState().documents[documentId] : null;
+      const allAnnotations = currentDoc?.annotations || [];
+      
+      if (allAnnotations.length === 0) {
+        showToast("No annotations to export", "success");
+        return;
+      }
+      
+      exportAnnotations(allAnnotations, documentId);
+      showToast("Annotations exported successfully", "success");
     } catch (error) {
-      console.error("Failed to import annotations:", error);
-      setImportStatus({
-        loading: false,
-        error: "Failed to import annotations. Please check the file format.",
+      console.error("Export annotations error:", error);
+      showToast(`Export failed: ${error instanceof Error ? error.message : 'Unknown error'}`, "error");
+    }
+  }, [document, documentId, showToast]);
+  
+  // Import annotations from JSON file
+  const handleImportAnnotations = useCallback(async () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+      
+      setImportStatus({ loading: true, error: null });
+      
+      try {
+        const importedAnnotations = await importAnnotations(file);
+        
+        // Add imported annotations to the store
+        const store = useAnnotationStore.getState();
+        importedAnnotations.forEach(annotation => {
+          store.addAnnotation(documentId, annotation);
+        });
+        
+        showToast(`Imported ${importedAnnotations.length} annotations`, "success");
+      } catch (error) {
+        console.error("Import error:", error);
+        setImportStatus({ loading: false, error: error instanceof Error ? error.message : 'Unknown error' });
+        showToast(`Import failed: ${error instanceof Error ? error.message : 'Unknown error'}`, "error");
+      } finally {
+        setImportStatus({ loading: false, error: null });
+      }
+    };
+    
+    input.click();
+  }, [documentId, showToast]);
+
+  // Remove zoom functions
+  
+  const handleFitToWidth = useCallback(() => {
+    if (!containerRef.current || !page) return;
+    
+    const containerWidth = containerRef.current.clientWidth - 32; // Subtract padding
+    const viewport = page.getViewport({ scale: 1.0 });
+    const newScale = containerWidth / viewport.width;
+    setScale(newScale);
+  }, [page]);
+
+  // Function to generate a canvas with PDF content and annotations
+  const createAnnotatedCanvas = useCallback(async (targetPage: PDFPageProxy, annotations: Annotation[]) => {
+    // Create a new canvas for exporting
+    const exportCanvas = document.createElement("canvas");
+    const viewport = targetPage.getViewport({ scale });
+    exportCanvas.width = viewport.width;
+    exportCanvas.height = viewport.height;
+    
+    // Get 2D context with alpha support for better annotation rendering
+    const ctx = exportCanvas.getContext("2d", { alpha: true })!;
+    
+    // Set white background
+    ctx.fillStyle = "#FFFFFF";
+    ctx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+    
+    // Render PDF
+    console.log(`[PDFViewer] Rendering PDF content to export canvas`);
+    const renderTask = targetPage.render({
+      canvasContext: ctx,
+      viewport: viewport,
+      intent: "display"
+    });
+    
+    // Wait for PDF rendering to complete
+    await renderTask.promise;
+    
+    // Now draw annotations on top
+    console.log(`[PDFViewer] Drawing ${annotations.length} annotations on export canvas`);
+    
+    // First draw non-highlight annotations
+    const regularAnnotations = annotations.filter(a => a.type !== 'highlight');
+    regularAnnotations.forEach(annotation => {
+      try {
+        drawAnnotation(ctx, annotation, scale);
+      } catch (err) {
+        console.error("Error drawing annotation during export:", err);
+      }
+    });
+    
+    // Then draw highlights with multiply blend mode
+    const highlightAnnotations = annotations.filter(a => a.type === 'highlight');
+    if (highlightAnnotations.length > 0) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'multiply';
+      
+      highlightAnnotations.forEach(annotation => {
+        try {
+          drawAnnotation(ctx, annotation, scale);
+        } catch (err) {
+          console.error("Error drawing highlight during export:", err);
+        }
+      });
+      
+      ctx.restore();
+    }
+    
+    return { canvas: exportCanvas, viewport };
+  }, [scale]);
+  
+  // Export all pages with annotations
+  const handleExportAllPages = useCallback(async () => {
+    if (!pdf || !canvasRef.current || !viewport) {
+      showToast("Cannot export - PDF not fully loaded", "error");
+      return;
+    }
+    
+    try {
+      setIsExporting(true);
+      
+      // Get all annotations from the store
+      const currentDoc = document ? useAnnotationStore.getState().documents[documentId] : null;
+      if (!currentDoc) {
+        showToast("Document not found in store", "error");
+        return;
+      }
+      
+      // Create a PDF with multiple pages
+      const multiPagePdf = new jsPDF({
+        orientation: viewport.width > viewport.height ? "landscape" : "portrait",
+        unit: "px",
+        format: [viewport.width, viewport.height],
+      });
+      
+      showToast("Starting export of all pages with annotations...", "success");
+      
+      // Export each page
+      for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+        try {
+          // Get the page
+          const pageObj = await pdf.getPage(pageNum);
+          
+          // Get annotations for this page
+          const pageAnnotations = currentDoc.annotations.filter(
+            (a: Annotation) => a.pageNumber === pageNum
+          );
+          
+          // Create a canvas with both PDF and annotations using our improved function
+          const exportCanvas = await createAnnotatedCanvas(pageObj, pageAnnotations);
+          
+          // If not the first page, add a new page to the PDF
+          if (pageNum > 1) {
+            multiPagePdf.addPage([viewport.width, viewport.height]);
+          }
+          
+          // Add the page with annotations
+          multiPagePdf.addImage(
+            exportCanvas.canvas.toDataURL("image/png", 1.0),
+            "PNG",
+            0,
+            0,
+            viewport.width,
+            viewport.height
+          );
+          
+          // Update progress through console
+          console.log(`Processed page ${pageNum} of ${pdf.numPages} with ${pageAnnotations.length} annotations`);
+        } catch (error) {
+          console.error(`Error processing page ${pageNum}:`, error);
+          showToast(`Error on page ${pageNum}: ${error instanceof Error ? error.message : 'Unknown error'}`, "error");
+        }
+      }
+      
+      // Save the complete PDF with a timestamp
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      multiPagePdf.save(`${documentId}-annotated-${timestamp}.pdf`);
+      showToast("All pages exported successfully with annotations", "success");
+    } catch (error) {
+      console.error("Export all pages error:", error);
+      showToast(`Export failed: ${error instanceof Error ? error.message : 'Unknown error'}`, "error");
+    } finally {
+      setIsExporting(false);
+    }
+  }, [pdf, canvasRef, viewport, scale, document, documentId, showToast, createAnnotatedCanvas]);
+
+  // Set up event listeners
+  useEffect(() => {
+    if (!containerRef.current) return;
+    
+    // Variable to track scheduled renders
+    let renderTimeout: NodeJS.Timeout | null = null;
+    let lastRenderTime = 0;
+    const RENDER_COOLDOWN = 100; // Even shorter cooldown (ms) for more responsive feedback
+    
+    // Function to handle annotation changes
+    const handleAnnotationChange = (event: CustomEvent) => {
+      // Get event details
+      const source = event.detail.source || 'unknown';
+      const targetPageNumber = event.detail.pageNumber || currentPage;
+      const forceRender = event.detail.forceRender === true;
+      
+      console.log(`[PDFViewer] Annotation change detected from ${source} for page ${targetPageNumber}`);
+      
+      // User interactions should always trigger a render
+      const isUserInteraction = source === 'userDrawing' || source === 'userEdit' || 
+                               source === 'userAction' || forceRender;
+      
+      // If there's a pending render timeout, clear it
+      if (renderTimeout) {
+        clearTimeout(renderTimeout);
+        renderTimeout = null;
+      }
+      
+      // If this is from user interaction, render immediately
+      if (isUserInteraction) {
+        console.log(`[PDFViewer] Processing immediate render for user interaction (${source})`);
+        lastRenderTime = Date.now();
+        
+        // Only render if the event is for the current page
+        if (targetPageNumber === currentPage) {
+          // Force a fresh render
+          hasRenderedOnceRef.current[currentPage] = false;
+          renderedPagesRef.current.delete(currentPage);
+          
+          // Immediate render - even shorter delay
+          setTimeout(() => {
+            renderPdfPage();
+          }, 0); // Immediate execution in next tick
+        }
+        return;
+      }
+      
+      // Shorter cooldown time for all other events
+      const now = Date.now();
+      if (now - lastRenderTime < RENDER_COOLDOWN) {
+        console.log(`[PDFViewer] Throttling render due to cooldown (${now - lastRenderTime}ms)`);
+        
+        // Schedule with shorter delay
+        renderTimeout = setTimeout(() => {
+          console.log('[PDFViewer] Executing delayed render after cooldown');
+          lastRenderTime = Date.now();
+          
+          if (targetPageNumber === currentPage) {
+            hasRenderedOnceRef.current[currentPage] = false;
+            renderedPagesRef.current.delete(currentPage);
+            renderPdfPage();
+          }
+        }, 50); // Very short delay for better responsiveness
+        
+        return;
+      }
+      
+      // Update the last render time
+      lastRenderTime = now;
+      
+      // If we're on the page that was modified, render immediately
+      if (targetPageNumber === currentPage) {
+        console.log(`[PDFViewer] Triggering regular render for non-user change (${source})`);
+        
+        hasRenderedOnceRef.current[currentPage] = false;
+        renderedPagesRef.current.delete(currentPage);
+        
+        // Set force render flag on annotation canvas
+        const annotationCanvas = document.querySelector('.annotation-canvas-container canvas') as HTMLCanvasElement;
+        if (annotationCanvas) {
+          annotationCanvas.dataset.forceRender = 'true';
+        }
+        
+        // Immediate render
+        setTimeout(() => {
+          renderPdfPage();
+        }, 0);
+      }
+    };
+    
+    // Add event listeners to multiple sources to ensure we catch all events
+    containerRef.current.addEventListener('annotationChanged', handleAnnotationChange as EventListener);
+    
+    // Also listen on document body for events that might bubble up there
+    document.body.addEventListener('annotationChanged', handleAnnotationChange as EventListener);
+    
+    // Cleanup function
+    return () => {
+      // Remove event listeners
+      containerRef.current?.removeEventListener('annotationChanged', handleAnnotationChange as EventListener);
+      document.body.removeEventListener('annotationChanged', handleAnnotationChange as EventListener);
+      
+      // Clear any pending timeouts
+      if (renderTimeout) {
+        clearTimeout(renderTimeout);
+      }
+    };
+  }, [canvasRef, containerRef, currentPage, pageChangeInProgress, renderPdfPage, isRendering]);
+
+  // Function to verify annotation integrity
+  const verifyAnnotationIntegrity = useCallback((documentId: string, pageNumber: number) => {
+    // Get annotations for this page
+    const annotations = getAnnotationsForPage(documentId, pageNumber);
+    
+    // Check if annotations are valid
+    const invalidAnnotations = annotations.filter(annotation => {
+      // Check for required properties
+      if (!annotation.id || !annotation.type || !annotation.pageNumber) {
+        console.error('[PDFViewer] Invalid annotation found:', annotation);
+        return true;
+      }
+      
+      // Check for valid coordinates
+      if (annotation.type !== 'text') {
+        if (!annotation.points || annotation.points.length === 0) {
+          console.error('[PDFViewer] Annotation missing points:', annotation);
+          return true;
+        }
+        
+        // Check if points are within page bounds
+        if (page && viewport) {
+          const outOfBounds = annotation.points.some(point => 
+            point.x < 0 || point.x > viewport.width || 
+            point.y < 0 || point.y > viewport.height
+          );
+          
+          if (outOfBounds) {
+            console.warn('[PDFViewer] Annotation has out-of-bounds points:', annotation);
+            // We don't mark these as invalid, just log a warning
+          }
+        }
+      }
+      
+      return false;
+    });
+    
+    if (invalidAnnotations.length > 0) {
+      console.warn(`[PDFViewer] Found ${invalidAnnotations.length} invalid annotations on page ${pageNumber}`);
+      showToast(`Found ${invalidAnnotations.length} invalid annotations. They may not display correctly.`, "error");
+      return false;
+    }
+    
+    console.log(`[PDFViewer] All ${annotations.length} annotations on page ${pageNumber} are valid`);
+    return true;
+  }, [getAnnotationsForPage, page, viewport, showToast]);
+  
+  // Effect to verify annotations when page changes
+  useEffect(() => {
+    if (pdf && documentId) {
+      // Verify annotations for the current page
+      verifyAnnotationIntegrity(documentId, currentPage);
+    }
+  }, [currentPage, pdf, documentId, verifyAnnotationIntegrity]);
+
+  // Function to verify PDF integrity
+  const verifyPDFIntegrity = useCallback(async () => {
+    if (!pdf) return false;
+    
+    try {
+      // Check if document can be accessed
+      const metadata = await pdf.getMetadata();
+      const title = metadata?.info ? (metadata.info as any).Title || 'Untitled' : 'Untitled';
+      console.log('[PDFViewer] PDF metadata verified:', title);
+      
+      // Verify page access - check first, middle and last page
+      const numPages = pdf.numPages;
+      const pagesToCheck = [1, Math.ceil(numPages / 2), numPages];
+      
+      for (const pageNum of pagesToCheck) {
+        try {
+          await pdf.getPage(pageNum);
+        } catch (error) {
+          console.error(`[PDFViewer] Failed to access page ${pageNum}:`, error);
+          showToast(`Error accessing page ${pageNum}. The PDF may be corrupted.`, "error");
+          return false;
+        }
+      }
+      
+      return true;
+    } catch (error) {
+      console.error('[PDFViewer] PDF integrity check failed:', error);
+      showToast('PDF integrity check failed. The document may be corrupted.', "error");
+      return false;
+    }
+  }, [pdf, showToast]);
+
+  // Reset loading state when file changes
+  useEffect(() => {
+    // Don't do anything if there's no file
+    if (!file) {
+      console.log('[PDFViewer] No file provided, skipping load');
+      return;
+    }
+    
+    // Generate a unique ID for this file
+    const currentFileId = typeof file === 'string' ? file : `${file.name}_${file.lastModified}`;
+    
+    console.log(`[PDFViewer] Processing file: ${currentFileId}`);
+    
+    // Clear state for a fresh load
+    setHasStartedLoading(false);
+    setCurrentPage(1);
+    setRenderError(null);
+    
+    // Reset render tracking
+    hasRenderedOnceRef.current = {};
+    renderedPagesRef.current.clear();
+    
+    // Simple load process with retry
+    const loadPdf = () => {
+      console.log(`[PDFViewer] Loading PDF file: ${currentFileId}`);
+      
+      if (typeof file === "string") {
+        // For URL, fetch it first
+        fetch(file)
+          .then(response => {
+            if (!response.ok) {
+              throw new Error(`Failed to fetch PDF: ${response.status}`);
+            }
+            return response.blob();
+          })
+          .then(blob => {
+            const pdfFile = new File([blob], file.split('/').pop() || 'document.pdf', { type: 'application/pdf' });
+            setPdfFile(pdfFile);
+            setHasStartedLoading(true);
+          })
+          .catch(error => {
+            console.error('[PDFViewer] Error loading PDF from URL:', error);
+            setRenderError(error instanceof Error ? error : new Error(String(error)));
+            // Try once more with a different approach if it failed
+            setTimeout(() => {
+              setPdfFile(null);
+              setPdfFile(file as any); // Try direct loading via string as fallback
+            }, 500);
+          });
+      } else {
+        // For File object, load directly
+        setPdfFile(null); // Clear first
+        setTimeout(() => {
+          setPdfFile(file);
+          setHasStartedLoading(true);
+        }, 50);
+      }
+    };
+    
+    // Attempt to load the PDF
+    loadPdf();
+    
+    // Cleanup function
+    return () => {
+      // If we need to cancel any pending operations, do it here
+      if (renderTaskRef.current) {
+        try {
+          renderTaskRef.current.cancel();
+        } catch (error) {
+          console.error('[PDFViewer] Error cancelling render task:', error);
+        }
+        renderTaskRef.current = null;
+      }
+    };
+  }, [file]); // Only depend on file to prevent loops
+
+  // Effect to handle PDF document loading and verification
+  useEffect(() => {
+    if (!pdf) return;
+    
+    // Limit the frequency of log messages to prevent spam
+    const now = Date.now();
+    const lastLog = pdfLoadLogTimestampRef.current;
+    if (now - lastLog < 1000) {
+      // Don't log if less than 1 second since last log
+      return;
+    }
+    pdfLoadLogTimestampRef.current = now;
+    
+    console.log("[PDFViewer] PDF document loaded successfully:", pdf.numPages, "pages");
+    
+    // Verify PDF integrity only if not already verified for this document
+    if (!pdfVerifiedRef.current) {
+      verifyPDFIntegrity().then(isValid => {
+        if (isValid) {
+          console.log('[PDFViewer] PDF integrity check passed');
+          pdfVerifiedRef.current = true;
+          
+          // Set the document ID in the annotation store to load annotations
+          annotationStore.setCurrentDocument(documentId);
+          
+          // Force render of first page with annotations (if renderPdfPage exists)
+          if (typeof renderPdfPage === 'function') {
+            // Clear any previous render lock that might be blocking rendering
+            renderLockRef.current = false;
+            
+            // Only trigger render if we're not already rendering
+            if (!isRendering && !pageChangeInProgress) {
+              console.log("[PDFViewer] Triggering initial render");
+              setTimeout(() => {
+                renderPdfPage();
+              }, 100); // Small delay to ensure everything is ready
+            }
+          }
+        }
       });
     }
-  };
+  }, [pdf, documentId, annotationStore, verifyPDFIntegrity, isRendering, pageChangeInProgress, renderPdfPage]);
 
-  // Add save functionality
-  useEffect(() => {
-    // Save annotations when they change
-    const document = store.documents[documentId];
-    if (document) {
-      saveAnnotations(documentId);
+  // Add these refs near the top with other refs
+  const pdfLoadLogTimestampRef = useRef<number>(0);
+  const pdfVerifiedRef = useRef<boolean>(false);
+
+  // Function to handle stamp annotations
+  const handleStampAnnotation = useCallback((event: MouseEvent) => {
+    // Only process if current tool is a stamp type
+    if (!currentTool || !['stamp', 'stampApproved', 'stampRejected', 'stampRevision'].includes(currentTool)) {
+      return;
     }
-  }, [store.documents[documentId]?.annotations]);
 
-  // Add load functionality
-  useEffect(() => {
-    // Load annotations when component mounts
-    const savedAnnotations = loadAnnotations(documentId);
-    if (savedAnnotations) {
-      store.importAnnotations(documentId, savedAnnotations, "replace");
+    // Get canvas and container references
+    const canvas = canvasRef.current;
+    const container = containerRef.current;
+    
+    if (!canvas || !container || !pdf || !page || !viewport) {
+      console.warn('[PDFViewer] Cannot create stamp: canvas, container, pdf, page or viewport is missing');
+      return;
     }
-  }, [documentId]);
 
-  // Render error state
-  if (renderError && !isRendering && renderAttempts >= 3) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full p-4">
-        <div className="text-red-500 font-medium mb-2 flex items-center">
-          <AlertTriangle className="mr-2" size={20} />
-          Failed to render PDF
-        </div>
-        <div className="text-gray-700 text-sm mb-4 max-w-md text-center">
-          {renderError.message || "The PDF could not be displayed. This might be due to network issues or a corrupted file."}
-        </div>
-        <button 
-          className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 flex items-center"
-          onClick={handleRetryRender}
-        >
-          <RefreshCw className="mr-2" size={16} />
-          Retry Loading PDF
-        </button>
-      </div>
-    );
-  }
+    // Get relative mouse position on canvas
+    const rect = canvas.getBoundingClientRect();
+    const x = (event.clientX - rect.left);
+    const y = (event.clientY - rect.top);
 
-  // Error state for PDF document or page loading errors
-  if (pdfError || pageError) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full p-4">
-        <div className="text-red-500 font-medium mb-2 flex items-center">
-          <AlertTriangle className="mr-2" size={20} />
-          Error loading PDF
-        </div>
-        <div className="text-gray-700 text-sm mb-4 max-w-md text-center">
-          {pdfError?.message || pageError?.message || "Unknown error occurred while loading the PDF document."}
-        </div>
-        <button 
-          className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 flex items-center"
-          onClick={() => window.location.reload()}
-        >
-          <RefreshCw className="mr-2" size={16} />
-          Reload Page
-        </button>
-      </div>
-    );
-  }
+    // Convert to unscaled PDF coordinates
+    let pointInPdfCoordinates: Point;
+    
+    // Check if viewport has convertToPdfPoint method
+    if ('convertToPdfPoint' in viewport) {
+      const pdfPoint = (viewport as any).convertToPdfPoint(x, y);
+      pointInPdfCoordinates = {
+        x: pdfPoint[0] / scale,
+        y: pdfPoint[1] / scale
+      };
+    } else {
+      // Fallback to standard conversion
+      pointInPdfCoordinates = {
+        x: x / scale,
+        y: y / scale
+      };
+    }
 
-  // Loading state
-  if (isPdfLoading || isPageLoading || (isRendering && !page)) {
-    return (
-      <div className="flex flex-col items-center justify-center h-full">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500 mb-4"></div>
-        <p className="text-gray-700">Loading PDF document...</p>
-      </div>
-    );
-  }
+    // Determine which stamp type to use based on the current tool
+    let stampType: "approved" | "rejected" | "revision" = "approved";
+    
+    if (currentTool === 'stampRejected') {
+      stampType = "rejected";
+    } else if (currentTool === 'stampRevision') {
+      stampType = "revision";
+    }
 
-  if (!pdf || !page) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <div className="text-gray-500 text-center p-4">
-          {pdfFile ? "Preparing PDF viewer..." : "No PDF document loaded"}
-        </div>
-      </div>
-    );
-  }
+    // Create the stamp annotation
+    const newAnnotation: Annotation = {
+      id: Date.now().toString(),
+      type: currentTool as AnnotationType,
+      points: [pointInPdfCoordinates],
+      style: {
+        color: currentTool === 'stampRejected' ? '#FF0000' : 
+              currentTool === 'stampRevision' ? '#0000FF' : '#00AA00',
+        lineWidth: 2,
+        opacity: 1,
+        stampType
+      },
+      pageNumber: currentPage,
+      timestamp: Date.now(),
+      userId: "current-user",
+      version: 1,
+    };
 
-  const viewport = page.getViewport({ scale });
+    // Add the annotation to the store
+    annotationStore.addAnnotation(documentId, newAnnotation);
+
+    // Dispatch event to ensure immediate rendering - try multiple approaches
+    // Method 1: Dispatch to PDF container
+    const pdfContainer = document.querySelector('.pdf-container') || document.querySelector('.pdf-container-fixed');
+    if (pdfContainer) {
+      const customEvent = new CustomEvent('annotationChanged', {
+        detail: {
+          pageNumber: currentPage,
+          source: 'userDrawing',
+          forceRender: true
+        },
+      });
+      pdfContainer.dispatchEvent(customEvent);
+      console.log('[PDFViewer] Stamp annotation added and event dispatched to container');
+    }
+    
+    // Method 2: Dispatch to annotation canvas directly
+    const annotationCanvas = document.querySelector('.annotation-canvas-container canvas');
+    if (annotationCanvas) {
+      // Set data attribute to force render
+      (annotationCanvas as HTMLCanvasElement).dataset.forceRender = 'true';
+      
+      // Create and dispatch event
+      const canvasEvent = new CustomEvent('annotationChanged', {
+        detail: {
+          pageNumber: currentPage,
+          source: 'userDrawing',
+          forceRender: true
+        },
+      });
+      annotationCanvas.dispatchEvent(canvasEvent);
+      console.log('[PDFViewer] Event dispatched to annotation canvas');
+    }
+    
+    // Method 3: Directly trigger via document event
+    document.dispatchEvent(new CustomEvent('annotationChanged', {
+      detail: {
+        pageNumber: currentPage,
+        source: 'userDrawing',
+        forceRender: true
+      }
+    }));
+    
+    // Reset rendered state to force a refresh
+    if (hasRenderedOnceRef.current) {
+      hasRenderedOnceRef.current[currentPage] = false;
+    }
+    renderedPagesRef.current.delete(currentPage);
+    
+    console.log('[PDFViewer] Stamp added successfully, triggered multiple render methods');
+  }, [annotationStore, currentPage, currentTool, documentId, hasRenderedOnceRef, page, pdf, renderedPagesRef, scale, viewport]);
+  
+  // Add event listener for stamp tool when appropriate
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    // Only add click listener if we're using a stamp tool
+    if (['stamp', 'stampApproved', 'stampRejected', 'stampRevision'].includes(currentTool)) {
+      canvas.addEventListener('click', handleStampAnnotation);
+      
+      // Update cursor to indicate stamp placement
+      canvas.style.cursor = 'crosshair';
+    }
+
+    return () => {
+      // Clean up event listener
+      canvas.removeEventListener('click', handleStampAnnotation);
+    };
+  }, [currentTool, handleStampAnnotation]);
 
   return (
     <div className="relative flex flex-col h-full">
@@ -940,6 +1375,7 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
           onClose={() => setIsShortcutGuideOpen(false)}
         />
       )}
+      
       {pdf && (
         <PDFControls
           currentPage={currentPage}
@@ -950,18 +1386,23 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
           importError={importStatus.error}
           onPrevPage={handlePrevPage}
           onNextPage={handleNextPage}
-          onZoomIn={handleZoomIn}
-          onZoomOut={handleZoomOut}
-          onZoomReset={handleZoomReset}
-          onFitToWidth={fitToWidth}
           onExportCurrentPage={handleExportCurrentPage}
-          onExportAllPages={exportAllPages}
+          onExportAllPages={handleExportAllPages}
           onExportAnnotations={handleExportAnnotations}
           onImportAnnotations={handleImportAnnotations}
+          onFitToWidth={handleFitToWidth}
         />
       )}
       
-      <div className="pdf-container-fixed h-full flex-1 overflow-hidden" ref={containerRef}>
+      {/* Page indicator for event targeting */}
+      {pdf && (
+        <div className="hidden">
+          <span className="page-number-display">{`${currentPage} / ${pdf.numPages}`}</span>
+          <div id="tool-change-indicator" data-tool-changed="false"></div>
+        </div>
+      )}
+
+      <div className="pdf-container h-full flex-1 overflow-hidden" ref={containerRef}>
         {/* PDF Viewer - Fixed container with scrollable content */}
         <div className="relative flex-1 overflow-auto bg-gray-100 p-2 md:p-4">
           <div 
@@ -971,8 +1412,8 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
               height: page ? `${viewport.height}px` : `${containerHeight}px`,
               position: 'relative',
               maxWidth: '100%',
-              marginBottom: '20px', // Add bottom margin to ensure visibility
-              opacity: isRendering ? 0.7 : 1, // Show slight fade during rendering
+              marginBottom: '20px',
+              opacity: isRendering ? 0.7 : 1,
               transition: 'opacity 0.2s ease-in-out',
             }}
           >
@@ -985,7 +1426,7 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
                     margin: '0 auto',
                   }}
                 />
-                {/* Only render annotation canvas when the PDF is ready */}
+                {/* Always render the annotation canvas once the PDF is initially loaded */}
                 {isViewerReady && (
                   <AnnotationCanvas
                     documentId={documentId}
@@ -998,10 +1439,20 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, documentId }) => {
               </>
             )}
             
-            {/* Rendering indicator - more subtle than the full screen loader */}
-            {isRendering && page && (
-              <div className="absolute top-2 right-2 bg-white bg-opacity-80 rounded-full p-1 z-50 shadow-md">
-                <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-blue-500"></div>
+            {/* Loading indicator during rendering */}
+            {(isRendering || pageChangeInProgress) && (
+              <div className="absolute top-0 left-0 z-50 w-full h-full flex items-center justify-center bg-white bg-opacity-70">
+                <div className="flex flex-col items-center bg-white p-4 rounded-lg shadow-lg">
+                  <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-500 mb-2"></div>
+                  <div className="text-gray-700">
+                    {pageChangeInProgress ? `Loading page ${currentPage}...` : 'Rendering PDF...'}
+                  </div>
+                  {renderAttempts > 0 && (
+                    <div className="text-amber-600 text-xs mt-1">
+                      Attempt {renderAttempts + 1}/3
+                    </div>
+                  )}
+                </div>
               </div>
             )}
             

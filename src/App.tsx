@@ -12,6 +12,7 @@ import { KeyboardShortcutGuide } from "./components/KeyboardShortcutGuide";
 import { useKeyboardShortcutGuide } from "./hooks/useKeyboardShortcutGuide";
 import SharedContent from './components/SharedContent';
 import { Toolbar } from './components/Toolbar';
+import TokenUpload from './components/TokenUpload';
 
 // Protected Route Component
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -62,6 +63,10 @@ export const App: React.FC = () => {
                 <Route
                   path="/shared/:token"
                   element={<SharedContent />}
+                />
+                <Route
+                  path="/upload"
+                  element={<TokenUpload />}
                 />
               </Routes>
           
