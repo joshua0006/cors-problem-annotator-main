@@ -20,6 +20,13 @@ import { Timestamp } from "firebase/firestore";
 import { createShareToken } from '../services/shareService';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
+import { ConfirmDialog } from './ui/ConfirmDialog';
+
+// Local type definition for the DocumentViewer's Folder type
+interface ViewerFolder {
+  id: string;
+  name: string;
+}
 
 interface DocumentListProps {
   documents: Document[];
@@ -84,6 +91,8 @@ export default function DocumentList({
   const [loading, setLoading] = useState(false);
   const { showToast } = useToast();
   const { user } = useAuth();
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [itemToDelete, setItemToDelete] = useState<{id: string, type: 'document' | 'folder', name: string} | null>(null);
 
   const currentDocs = isSharedView ? sharedDocuments || [] : documents.filter(
     (doc) => doc.folderId === currentFolder?.id
@@ -119,11 +128,18 @@ export default function DocumentList({
     }
   };
 
-  const handleBreadcrumbNavigation = (folder?: Folder) => {
+  const handleBreadcrumbNavigation = (folder?: ViewerFolder) => {
     if (selectedDocument) {
       setSelectedDocument(undefined);
     }
-    onFolderSelect?.(folder);
+    
+    if (folder) {
+      // Find the corresponding folder from our folders array
+      const matchingFolder = folders.find(f => f.id === folder.id);
+      onFolderSelect?.(matchingFolder);
+    } else {
+      onFolderSelect?.(undefined);
+    }
   };
 
   const handleShare = async (resourceId: string, isFolder: boolean) => {
@@ -131,7 +147,7 @@ export default function DocumentList({
       const token = await createShareToken(
         resourceId,
         isFolder ? 'folder' : 'file',
-        user?.uid || '',
+        user?.id || '',
         { expiresInHours: 168 } // 7 days
       );
       
@@ -144,6 +160,30 @@ export default function DocumentList({
       console.error('Sharing failed:', error);
       showToast('Failed to create share link', 'error');
     }
+  };
+
+  const handleDeleteItem = () => {
+    if (!itemToDelete) return;
+
+    try {
+      if (itemToDelete.type === 'document') {
+        onDeleteDocument(itemToDelete.id);
+      } else {
+        onDeleteFolder(itemToDelete.id);
+      }
+      showToast(`${itemToDelete.name} deleted successfully`, 'success');
+    } catch (error) {
+      console.error('Delete failed:', error);
+      showToast(`Failed to delete ${itemToDelete.name}`, 'error');
+    } finally {
+      setItemToDelete(null);
+      setDeleteConfirmOpen(false);
+    }
+  };
+
+  const confirmDelete = (id: string, type: 'document' | 'folder', name: string) => {
+    setItemToDelete({ id, type, name });
+    setDeleteConfirmOpen(true);
   };
 
   const renderBreadcrumbs = () => {
@@ -225,8 +265,9 @@ export default function DocumentList({
             document={selectedDocument}
             onClose={() => setSelectedDocument(undefined)}
             onRefresh={onRefresh}
-            folders={folders}
+            folders={folders.map(f => ({ id: f.id, name: f.name }))}
             onNavigateToFolder={handleBreadcrumbNavigation}
+            viewerHeight={600}
           />
         </div>
       ) : (
@@ -272,7 +313,7 @@ export default function DocumentList({
                         <Pencil className="w-4 h-4" />
                       </button>
                       <button
-                        onClick={() => onDeleteFolder(folder.id)}
+                        onClick={() => confirmDelete(folder.id, 'folder', folder.name)}
                         className="p-1 text-gray-400 hover:text-red-600 rounded-full hover:bg-gray-100"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -329,7 +370,7 @@ export default function DocumentList({
                         <Pencil className="w-4 h-4" />
                       </button>
                       <button
-                        onClick={() => onDeleteDocument(doc.id)}
+                        onClick={() => confirmDelete(doc.id, 'document', doc.name)}
                         className="p-1 text-gray-400 hover:text-red-600 rounded-full hover:bg-gray-100"
                       >
                         <Trash2 className="w-4 h-4" />
@@ -360,6 +401,17 @@ export default function DocumentList({
           )}
         </AnimatePresence>
       )}
+
+      <ConfirmDialog
+        isOpen={deleteConfirmOpen}
+        title={`Delete ${itemToDelete?.type === 'folder' ? 'Folder' : 'File'}`}
+        message={`Are you sure you want to delete "${itemToDelete?.name}"? This action cannot be undone.`}
+        confirmText="Delete"
+        cancelText="Cancel"
+        onConfirm={handleDeleteItem}
+        onCancel={() => setDeleteConfirmOpen(false)}
+        danger={true}
+      />
     </div>
   );
 }

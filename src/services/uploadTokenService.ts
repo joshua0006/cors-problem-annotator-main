@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
-import { doc, setDoc, getDoc, Timestamp, collection, query, where, getDocs } from 'firebase/firestore';
+import { doc, setDoc, getDoc, Timestamp, collection, query, where, getDocs, addDoc } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db, storage } from '../lib/firebase';
 import { ShareToken } from '../types';
@@ -8,7 +8,7 @@ import { ShareToken } from '../types';
 export interface UploadToken {
   id: string;
   folderId: string;
-  creatorId: string;
+  createdBy: string;
   createdAt: Date;
   expiresAt: Date;
   maxFileSize?: number; // in bytes
@@ -36,32 +36,80 @@ export const createUploadToken = async (
     metadata?: Record<string, any>;
   } = {}
 ): Promise<UploadToken> => {
-  const tokenId = uuidv4();
-  const now = new Date();
-  const expiresAt = new Date(now);
-  expiresAt.setHours(expiresAt.getHours() + (options.expiresInHours || 24)); // Default: 24 hours
+  try {
+    const {
+      expiresInHours = 24,
+      maxFileSize,
+      allowedFileTypes,
+      maxUploads,
+      metadata
+    } = options;
 
-  const token: UploadToken = {
-    id: tokenId,
-    folderId,
-    creatorId,
-    createdAt: now,
-    expiresAt,
-    maxFileSize: options.maxFileSize,
-    allowedFileTypes: options.allowedFileTypes,
-    maxUploads: options.maxUploads,
-    usedCount: 0,
-    metadata: options.metadata || {}
-  };
+    // Get the folder's project ID
+    let projectId = metadata?.projectId;
+    if (!projectId) {
+      try {
+        const folderDoc = await getDoc(doc(db, 'folders', folderId));
+        if (folderDoc.exists()) {
+          projectId = folderDoc.data().projectId;
+        }
+      } catch (error) {
+        console.error('Error getting folder projectId:', error);
+      }
+    }
 
-  // Store token in Firestore
-  await setDoc(doc(db, 'uploadTokens', tokenId), {
-    ...token,
-    createdAt: Timestamp.fromDate(now),
-    expiresAt: Timestamp.fromDate(expiresAt)
-  });
-  
-  return token;
+    // Calculate expiration date
+    const expiresIn = expiresInHours * 60 * 60 * 1000;
+    const expiresAt = new Date(Date.now() + expiresIn);
+
+    // Prepare token data
+    const tokenData = {
+      folderId,
+      createdBy: creatorId,
+      maxFileSize,
+      allowedFileTypes,
+      maxUploads,
+      usedCount: 0,
+      expiresAt: Timestamp.fromDate(expiresAt),
+      createdAt: Timestamp.now(),
+      metadata: {
+        ...metadata,
+        projectId: projectId || ''
+      }
+    };
+
+    const tokenId = uuidv4();
+    const token: UploadToken = {
+      id: tokenId,
+      folderId,
+      createdBy: creatorId,
+      createdAt: new Date(),
+      expiresAt,
+      maxFileSize,
+      allowedFileTypes,
+      maxUploads,
+      usedCount: 0,
+      metadata: {
+        ...metadata,
+        projectId: projectId || ''
+      }
+    };
+
+    // Store token in Firestore
+    await setDoc(doc(db, 'uploadTokens', tokenId), {
+      ...tokenData
+    });
+    
+    // Convert Firestore Timestamp to Date for the returned token
+    return {
+      ...token,
+      createdAt: tokenData.createdAt.toDate(),
+      expiresAt: tokenData.expiresAt.toDate()
+    };
+  } catch (error) {
+    console.error('Error creating upload token:', error);
+    throw error;
+  }
 };
 
 /**
@@ -71,18 +119,16 @@ export const createUploadToken = async (
  */
 export const validateUploadToken = async (tokenId: string): Promise<UploadToken | null> => {
   try {
-    // Query by token ID
-    const tokensRef = collection(db, 'uploadTokens');
-    const q = query(tokensRef, where('id', '==', tokenId));
-    const querySnapshot = await getDocs(q);
+    // Get token directly by document ID instead of querying 
+    const tokenDocRef = doc(db, 'uploadTokens', tokenId);
+    const tokenSnapshot = await getDoc(tokenDocRef);
 
-    if (querySnapshot.empty) {
-      console.error('Upload token not found');
+    if (!tokenSnapshot.exists()) {
+      console.error('Upload token not found:', tokenId);
       return null;
     }
 
-    const tokenDoc = querySnapshot.docs[0];
-    const tokenData = tokenDoc.data() as UploadToken;
+    const tokenData = tokenSnapshot.data();
     
     // Convert timestamps to Date objects
     const expiresAt = tokenData.expiresAt instanceof Timestamp 
@@ -93,10 +139,17 @@ export const validateUploadToken = async (tokenId: string): Promise<UploadToken 
       ? tokenData.createdAt.toDate()
       : new Date(tokenData.createdAt);
 
-    const token = {
-      ...tokenData,
+    const token: UploadToken = {
+      id: tokenId, // Use the document ID explicitly as the token ID
+      folderId: tokenData.folderId,
+      createdBy: tokenData.createdBy,
       expiresAt,
-      createdAt
+      createdAt,
+      maxFileSize: tokenData.maxFileSize,
+      allowedFileTypes: tokenData.allowedFileTypes,
+      maxUploads: tokenData.maxUploads,
+      usedCount: tokenData.usedCount || 0,
+      metadata: tokenData.metadata
     };
 
     // Check if token has expired
@@ -169,14 +222,13 @@ export const uploadFileWithToken = async (
     const downloadUrl = await getDownloadURL(uploadResult.ref);
 
     // Create document record in Firestore
-    const folderDocRef = doc(db, 'folders', token.folderId);
-    const documentsCollectionRef = collection(folderDocRef, 'documents');
-    
     const documentData = {
       name: file.name,
       type: file.type.includes('pdf') ? 'pdf' : 'other',
       url: downloadUrl,
       storagePath,
+      folderId: token.folderId,
+      projectId: token.metadata?.projectId || "",
       version: 1,
       dateModified: new Date().toISOString(),
       createdAt: Timestamp.now(),
@@ -190,9 +242,9 @@ export const uploadFileWithToken = async (
       }
     };
 
-    // Create a new document with auto-generated ID
-    const newDocRef = doc(documentsCollectionRef);
-    await setDoc(newDocRef, documentData);
+    // Create a new document in the top-level documents collection
+    const documentsCollectionRef = collection(db, 'documents');
+    const newDocRef = await addDoc(documentsCollectionRef, documentData);
     const documentId = newDocRef.id;
 
     // Update token usage count
