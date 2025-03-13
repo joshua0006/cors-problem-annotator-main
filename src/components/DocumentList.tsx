@@ -10,7 +10,7 @@ import {
   Home,
   Share2,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Document, Folder } from "../types";
 import DocumentBreadcrumbs from "./DocumentBreadcrumbs";
 import DocumentActions from "./DocumentActions";
@@ -52,6 +52,7 @@ interface DocumentListProps {
   isSharedView?: boolean;
   sharedDocuments?: Document[];
   sharedFolders?: Folder[];
+  selectedFile?: Document;
 }
 
 const formatDate = (date: string | Timestamp | Date) => {
@@ -85,6 +86,7 @@ export default function DocumentList({
   isSharedView,
   sharedDocuments,
   sharedFolders,
+  selectedFile,
 }: DocumentListProps) {
   const [editingId, setEditingId] = useState<string>();
   const [editName, setEditName] = useState("");
@@ -182,6 +184,24 @@ export default function DocumentList({
     }
   };
 
+  // Add method to get URL path with project ID for consistency
+  const getProjectPath = () => {
+    return projectId ? `/documents/projects/${projectId}` : '/documents';
+  };
+
+  // Expose method for the parent to utilize with proper project context
+  const getDocumentPath = (document: Document) => {
+    if (document.folderId) {
+      return `${getProjectPath()}/folders/${document.folderId}/files/${document.id}`;
+    } else {
+      return `${getProjectPath()}/files/${document.id}`;
+    }
+  };
+
+  const getFolderPath = (folder: Folder) => {
+    return `${getProjectPath()}/folders/${folder.id}`;
+  };
+
   const handleShare = async (resourceId: string, isFolder: boolean) => {
     try {
       const token = await createShareToken(
@@ -274,6 +294,83 @@ export default function DocumentList({
       />
     );
   };
+
+  // Add this effect to handle selected file from URL
+  useEffect(() => {
+    if (selectedFile) {
+      console.log("Setting selected document from selectedFile prop:", selectedFile.name);
+      setSelectedDocument(selectedFile);
+    }
+  }, [selectedFile]);
+
+  // Add additional effect to handle documents array changes
+  useEffect(() => {
+    if (documents.length > 0 && !selectedDocument && selectedFile) {
+      console.log("Documents loaded, setting selected document:", selectedFile.name);
+      setSelectedDocument(selectedFile);
+    }
+  }, [documents, selectedDocument, selectedFile]);
+
+  // Monitor for project changes while we have a selectedFile
+  useEffect(() => {
+    // Only proceed if we have a selectedFile and documents are loaded
+    if (selectedFile && documents.length > 0) {
+      console.log(`Looking for selected file ${selectedFile.id} in documents array of ${documents.length} items`);
+      
+      // Function to find and set the document
+      const findAndSetDocument = () => {
+        const foundDoc = documents.find(d => d.id === selectedFile.id);
+        if (foundDoc) {
+          console.log(`Found document in array: ${foundDoc.name}`);
+          if (!selectedDocument || selectedDocument.id !== foundDoc.id) {
+            console.log(`Setting selected document to: ${foundDoc.name}`);
+            setSelectedDocument(foundDoc);
+          }
+          return true;
+        }
+        return false;
+      };
+      
+      // Try to find immediately
+      const foundImmediately = findAndSetDocument();
+      
+      // If not found immediately, set up retry mechanism
+      if (!foundImmediately) {
+        console.log(`Document ${selectedFile.id} not found immediately, setting up retry...`);
+        
+        // Set up retries with increasing delays
+        let retryCount = 0;
+        const maxRetries = 5;
+        const retryDelay = 400; // Initial delay
+        
+        const retryFindDocument = () => {
+          if (retryCount >= maxRetries) {
+            console.log(`Max retries (${maxRetries}) reached, giving up on finding document ${selectedFile.id}`);
+            return;
+          }
+          
+          retryCount++;
+          console.log(`Retry attempt ${retryCount} for document ${selectedFile.id}`);
+          
+          const found = findAndSetDocument();
+          if (!found && retryCount < maxRetries) {
+            // Schedule next retry with increasing delay
+            const nextDelay = retryDelay * (1 + 0.5 * retryCount);
+            console.log(`Scheduling retry ${retryCount + 1} in ${nextDelay}ms`);
+            setTimeout(retryFindDocument, nextDelay);
+          }
+        };
+        
+        // Start retry process
+        const initialRetryTimeout = setTimeout(retryFindDocument, retryDelay);
+        
+        // Clean up function to cancel any pending retries
+        return () => {
+          clearTimeout(initialRetryTimeout);
+        };
+      }
+    }
+  }, [selectedFile, documents, projectId, selectedDocument]); // Include dependencies that should trigger re-checking
 
   return (
     <div

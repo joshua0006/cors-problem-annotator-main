@@ -8,3 +8,4 @@ export * from './milestoneService';
 export * from './uploadService';
 export * from './shareService';
 export * from './uploadTokenService';
+export * from './notificationService';

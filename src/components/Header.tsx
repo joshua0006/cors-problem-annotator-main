@@ -4,6 +4,7 @@ import { useOrganization } from '../contexts/OrganizationContext';
 import { useAuth } from '../contexts/AuthContext';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useState, useRef, useEffect } from 'react';
+import { NotificationIcon } from './NotificationIcon';
 
 export default function Header() {
   const location = useLocation();
@@ -101,6 +102,9 @@ export default function Header() {
               );
             })}
           </nav>
+
+          {/* Notification Icon */}
+          <NotificationIcon />
 
           {/* User Menu */}
           <div className="relative" ref={menuRef}>

@@ -36,6 +36,7 @@ export default function DocumentActions({
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [uploaderName, setUploaderName] = useState('');
 
   const folderInputRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLDivElement>(null);
@@ -144,6 +145,11 @@ export default function DocumentActions({
       return;
     }
 
+    if (!uploaderName.trim()) {
+      setError('Please provide your name or email');
+      return;
+    }
+
     try {
       setIsProcessing(true);
       setIsUploading(true);
@@ -161,7 +167,39 @@ export default function DocumentActions({
         });
       }, 300);
 
-      await onCreateDocument(newFileName.trim(), 'pdf', selectedFile, selectedFolderId);
+      // Upload the document with the name/email provided
+      const result = await onCreateDocument(newFileName.trim(), 'pdf', selectedFile, selectedFolderId);
+      
+      // Create a notification for the file upload
+      try {
+        // Get folder name
+        const folder = selectedFolderId 
+          ? folders.find(f => f.id === selectedFolderId) 
+          : { name: "Root" };
+        
+        const folderName = folder?.name || "Unknown Folder";
+        
+        // Import createFileUploadNotification directly if not already imported
+        if (typeof window !== 'undefined') {
+          const { createFileUploadNotification } = await import('../services/notificationService');
+          
+          // Create notification with minimal document ID info
+          await createFileUploadNotification(
+            newFileName.trim(),
+            uploaderName.trim(),
+            selectedFile.type,
+            selectedFolderId || '',
+            folderName,
+            '', // We'll skip the file ID for now (can be added later if needed)
+            projectId
+          );
+          
+          console.log('Upload notification created successfully');
+        }
+      } catch (notificationError) {
+        console.error('Error creating upload notification:', notificationError);
+      }
+      
       if (onRefresh) await onRefresh();
       
       clearInterval(progressInterval);
@@ -170,6 +208,7 @@ export default function DocumentActions({
       setTimeout(() => {
         setNewFileName('');
         setSelectedFile(null);
+        setUploaderName('');
         setSelectedFolderId(currentFolderId);
         setShowFileInput(false);
         setUploadProgress(0);
@@ -363,18 +402,37 @@ export default function DocumentActions({
             )}
 
             {selectedFile && (
-              <div className="mb-4">
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Document Name
-                </label>
-                <input
-                  type="text"
-                  value={newFileName}
-                  onChange={(e) => setNewFileName(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  autoFocus
-                />
-              </div>
+              <>
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Document Name
+                  </label>
+                  <input
+                    type="text"
+                    value={newFileName}
+                    onChange={(e) => setNewFileName(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    autoFocus
+                  />
+                </div>
+                
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Your Name/Email <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={uploaderName}
+                    onChange={(e) => setUploaderName(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="Enter your name or email"
+                    required
+                  />
+                  <p className="mt-1 text-xs text-gray-500">
+                    Required for tracking uploads and notifications
+                  </p>
+                </div>
+              </>
             )}
 
             {isUploading && (
@@ -408,7 +466,7 @@ export default function DocumentActions({
               </button>
               <button
                 onClick={handleCreateDocument}
-                disabled={!selectedFile || !newFileName.trim() || isUploading}
+                disabled={!selectedFile || !newFileName.trim() || !uploaderName.trim() || isUploading}
                 className="px-4 py-2 text-sm text-white bg-blue-500 rounded-md hover:bg-blue-600 transition-colors flex items-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isUploading ? (
