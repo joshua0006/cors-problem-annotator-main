@@ -348,7 +348,7 @@ export default function AppContent() {
         
         // If no specific project was found, select the first one
         if (!selectedProject) {
-          setSelectedProject(fetchedProjects[0]);
+        setSelectedProject(fetchedProjects[0]);
         }
       }
 
@@ -404,8 +404,8 @@ export default function AppContent() {
   useEffect(() => {
     // Don't reset if we're navigating to a specific folder within a new project
     if (!params.folderId) {
-      setCurrentFolderId(undefined);
-      setDocumentManagerFolderId(undefined);
+    setCurrentFolderId(undefined);
+    setDocumentManagerFolderId(undefined);
     } else {
       // Set the current folder ID to the one in the URL
       setCurrentFolderId(params.folderId);
@@ -669,15 +669,15 @@ export default function AppContent() {
           path="/documents/projects/:projectId/folders/:folderId/files/:fileId"
           element={
             <DocumentsPage
-              projects={projects}
+                  projects={projects}
               selectedProject={selectedProject}
               folders={folders}
               documents={documents}
               currentFolderId={currentFolderId}
               onFolderSelect={handleFolderSelect}
               onProjectSelect={setSelectedProject}
-              onUpdateProject={handleUpdateProject}
-              tasks={tasks}
+                  onUpdateProject={handleUpdateProject}
+                  tasks={tasks}
               createDocument={createDocument}
               createFolder={createFolder}
               updateFolder={updateFolder}
@@ -697,7 +697,7 @@ export default function AppContent() {
               folders={folders}
               documents={documents}
               currentFolderId={currentFolderId}
-              onFolderSelect={handleFolderSelect}
+                  onFolderSelect={handleFolderSelect}
               onProjectSelect={setSelectedProject}
               onUpdateProject={handleUpdateProject}
               tasks={tasks}

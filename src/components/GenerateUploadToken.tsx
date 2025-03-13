@@ -34,7 +34,7 @@ const GenerateUploadToken: React.FC<GenerateUploadTokenProps> = ({
     folderId,
     expiresInHours: 24, // 24 hours default
     maxFileSize: 50, // 50 MB default
-    allowedFileTypes: 'application/pdf,image/jpeg,image/png',
+    allowedFileTypes: '', // Empty string means all file types allowed
     maxUploads: 10,
     title: folderName ? `Upload to ${folderName}` : 'File Upload',
     description: ''
@@ -145,9 +145,13 @@ const GenerateUploadToken: React.FC<GenerateUploadTokenProps> = ({
                 <span className="font-medium">Max file size:</span> {(generatedToken.maxFileSize / (1024 * 1024)).toFixed(1)} MB
               </p>
             )}
-            {generatedToken.allowedFileTypes && generatedToken.allowedFileTypes.length > 0 && (
+            {generatedToken.allowedFileTypes && generatedToken.allowedFileTypes.length > 0 ? (
               <p>
                 <span className="font-medium">File types:</span> {generatedToken.allowedFileTypes.join(', ')}
+              </p>
+            ) : (
+              <p>
+                <span className="font-medium">File types:</span> All file types allowed
               </p>
             )}
           </div>
@@ -241,10 +245,10 @@ const GenerateUploadToken: React.FC<GenerateUploadTokenProps> = ({
               value={formData.allowedFileTypes}
               onChange={handleInputChange}
               className="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-              placeholder="application/pdf,image/jpeg,image/png"
+              placeholder="Leave empty to allow all file types"
             />
             <p className="mt-1 text-xs text-gray-500">
-              Comma-separated list of MIME types (e.g., application/pdf,image/jpeg)
+              Comma-separated list of MIME types (e.g., application/pdf,image/jpeg). Leave empty to allow all file types.
             </p>
           </div>
 

@@ -75,7 +75,7 @@ const TokenUpload: React.FC = () => {
     // Validate file type if token has allowedFileTypes
     if (token.allowedFileTypes && token.allowedFileTypes.length > 0) {
       if (!token.allowedFileTypes.includes(file.type)) {
-        setUploadError(`File type not allowed. Allowed types: ${token.allowedFileTypes.join(', ')}`);
+        setUploadError(`This file type (${file.type || 'unknown'}) is not allowed. Allowed types: ${token.allowedFileTypes.join(', ')}`);
         return;
       }
     }
@@ -192,7 +192,9 @@ const TokenUpload: React.FC = () => {
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop: handleDrop,
     disabled: !token || isUploading || uploadSuccess || !guestIdentifier.trim(),
-    accept: token?.allowedFileTypes ? 
+    // Only apply file type restrictions if token explicitly has allowedFileTypes
+    // Otherwise, accept all file types
+    accept: token?.allowedFileTypes && token.allowedFileTypes.length > 0 ? 
       token.allowedFileTypes.reduce((acc, type) => {
         acc[type] = [];
         return acc;
@@ -306,8 +308,10 @@ const TokenUpload: React.FC = () => {
             {token.maxFileSize && (
               <p>Maximum file size: {formatFileSize(token.maxFileSize)}</p>
             )}
-            {token.allowedFileTypes && token.allowedFileTypes.length > 0 && (
+            {token.allowedFileTypes && token.allowedFileTypes.length > 0 ? (
               <p>Allowed file types: {token.allowedFileTypes.join(', ')}</p>
+            ) : (
+              <p>Allowed file types: All file types accepted</p>
             )}
             {token.maxUploads && (
               <p>
