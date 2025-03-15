@@ -5,11 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "prebuild": "node build-preprocessor.js",
     "build": "tsc && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
     "postinstall": "patch-package || node ./src/patches/fixReactFileViewerCjs.cjs || node --input-type=module ./src/patches/fixReactFileViewer.js",
-    "fix-dependencies": "node ./src/patches/fixReactFileViewerCjs.cjs"
+    "fix-dependencies": "node ./src/patches/fixReactFileViewerCjs.cjs",
+    "build:netlify": "node build-preprocessor.js && npm run build"
   },
   "dependencies": {
     "@types/uuid": "^10.0.0",
