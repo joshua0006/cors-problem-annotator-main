@@ -19,7 +19,11 @@ export default function AddProject({ onSuccess, onCancel }: AddProjectProps) {
     metadata: {
       industry: '',
       projectType: '',
-      location: '', // Changed to single string
+      location: {
+        city: '',
+        state: '',
+        country: ''
+      },
       budget: '',
       scope: ''
     }
@@ -29,27 +33,55 @@ export default function AddProject({ onSuccess, onCancel }: AddProjectProps) {
     e.preventDefault();
     try {
       // Clean up empty values before submission
-      const cleanedData = {
-        ...formData,
+      const cleanedData: Omit<Project, 'id'> = {
+        name: formData.name,
+        client: formData.client,
+        status: formData.status,
+        progress: formData.progress,
+        startDate: formData.startDate,
+        endDate: formData.endDate,
+        teamMemberIds: [], // Include the required teamMemberIds property
         metadata: {
-          ...formData.metadata,
-          location: formData.metadata.location || 'N/A',
           industry: formData.metadata.industry || 'N/A',
           projectType: formData.metadata.projectType || 'N/A',
+          location: {
+            city: formData.metadata.location.city || 'N/A',
+            state: formData.metadata.location.state || 'N/A',
+            country: formData.metadata.location.country || 'N/A'
+          },
           budget: formData.metadata.budget || 'N/A',
           scope: formData.metadata.scope || 'N/A'
         }
       };
+      
+      console.log('Creating project with data:', cleanedData);
       await projectService.create(cleanedData);
+      console.log('Project created successfully');
       onSuccess?.();
     } catch (error) {
       console.error('Error creating project:', error);
+      alert(`Failed to create project: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
-    if (name.includes('.')) {
+    
+    if (name.startsWith('metadata.location.')) {
+      // Handle location sub-fields (city, state, country)
+      const locationField = name.split('.')[2]; // Get the third part (e.g., "city" from "metadata.location.city")
+      setFormData(prev => ({
+        ...prev,
+        metadata: {
+          ...prev.metadata,
+          location: {
+            ...prev.metadata.location,
+            [locationField]: value
+          }
+        }
+      }));
+    } else if (name.includes('.')) {
+      // Handle other metadata fields
       const [parent, child] = name.split('.');
       setFormData(prev => ({
         ...prev,
@@ -59,6 +91,7 @@ export default function AddProject({ onSuccess, onCancel }: AddProjectProps) {
         }
       }));
     } else {
+      // Handle top-level fields
       setFormData(prev => ({
         ...prev,
         [name]: value
@@ -173,18 +206,49 @@ export default function AddProject({ onSuccess, onCancel }: AddProjectProps) {
               </div>
             </div>
 
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Location
-              </label>
-              <input
-                type="text"
-                name="metadata.location"
-                value={formData.metadata.location}
-                onChange={handleChange}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="e.g., Sydney, Australia"
-              />
+            <div className="space-y-4">
+              <h3 className="text-lg font-medium text-gray-900">Location</h3>
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    City
+                  </label>
+                  <input
+                    type="text"
+                    name="metadata.location.city"
+                    value={formData.metadata.location.city}
+                    onChange={handleChange}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="Enter city"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    State/Province
+                  </label>
+                  <input
+                    type="text"
+                    name="metadata.location.state"
+                    value={formData.metadata.location.state}
+                    onChange={handleChange}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="Enter state/province"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Country
+                  </label>
+                  <input
+                    type="text"
+                    name="metadata.location.country"
+                    value={formData.metadata.location.country}
+                    onChange={handleChange}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="Enter country"
+                  />
+                </div>
+              </div>
             </div>
 
             <div>

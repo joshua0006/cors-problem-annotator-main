@@ -74,6 +74,19 @@ const ProjectItem = ({
   const prevProgressRef = useRef(progress);
   const statusUpdateTimeoutRef = useRef<NodeJS.Timeout>();
 
+  // Format location for display
+  const location =
+    typeof project.metadata?.location === "string"
+      ? project.metadata.location
+      : project.metadata?.location
+      ? `${project.metadata.location.city || ""}, ${
+          project.metadata.location.state || ""
+        }, ${project.metadata.location.country || ""}`.replace(
+          /^[, ]+|[, ]+$/g,
+          ""
+        )
+      : "";
+
   useEffect(() => {
     if (!milestonesLoading) {
       const newProgress = calculateMilestoneProgress(milestones);
@@ -173,7 +186,13 @@ const ProjectItem = ({
         <div className="flex items-start justify-between">
           <div className="flex-1">
             <h3 className="font-medium text-gray-900">{project.name}</h3>
-            <p className="text-sm text-gray-500 mt-1">{project.client}</p>
+            {project.client ? (
+              <p className="text-sm text-gray-500 mt-1">{project.client}</p>
+            ) : (
+              <br />
+            )}
+            
+          
           </div>
 
           <div className="relative status-menu">
@@ -334,10 +353,31 @@ export default function ProjectList({
     };
 
     if (newStatus === "archived") {
-      updates.metadata = {
-        ...projects.find((p) => p.id === projectId)?.metadata,
-        archivedAt: new Date().toISOString(),
-      };
+      const currentProject = projects.find((p) => p.id === projectId);
+      if (currentProject && currentProject.metadata) {
+        updates.metadata = {
+          industry: currentProject.metadata.industry || '',
+          projectType: currentProject.metadata.projectType || '',
+          location: currentProject.metadata.location || { city: '', state: '', country: '' },
+          budget: currentProject.metadata.budget || '',
+          scope: currentProject.metadata.scope || '',
+          archivedAt: new Date().toISOString(),
+          // Preserve any other existing metadata fields
+          ...(currentProject.metadata.lastMilestoneUpdate && { 
+            lastMilestoneUpdate: currentProject.metadata.lastMilestoneUpdate 
+          })
+        };
+      } else {
+        // If metadata doesn't exist, create a minimal valid structure
+        updates.metadata = {
+          industry: '',
+          projectType: '',
+          location: { city: '', state: '', country: '' },
+          budget: '',
+          scope: '',
+          archivedAt: new Date().toISOString()
+        };
+      }
     }
 
     onUpdateProject(projectId, updates);

@@ -64,71 +64,99 @@ export const documentService = {
       const uniqueFilename = `${timestamp}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
       const storagePath = `documents/${folderId}/${uniqueFilename}`;
 
-      // Upload file to Firebase Storage
-      const storageRef = ref(storage, storagePath);
-      const metadata = {
-        contentType: file.type,
-        customMetadata: {
-          originalFilename: file.name,
-          folderId,
-          version: '1'
-        }
-      };
+      let url: string;
 
-      const uploadResult = await uploadBytes(storageRef, file, metadata);
-      const url = await getDownloadURL(uploadResult.ref);
+      try {
+        // Upload file to Firebase Storage
+        const storageRef = ref(storage, storagePath);
+        const metadata = {
+          contentType: file.type,
+          customMetadata: {
+            originalFilename: file.name,
+            folderId,
+            version: '1'
+          }
+        };
+
+        console.log(`Uploading file to Firebase Storage: ${storagePath}`);
+        const uploadResult = await uploadBytes(storageRef, file, metadata);
+        url = await getDownloadURL(uploadResult.ref);
+        console.log(`File uploaded successfully, URL: ${url}`);
+      } catch (uploadError) {
+        console.error('Error uploading to Firebase Storage:', uploadError);
+        throw new Error('Failed to upload file. Please try again later.');
+      }
 
       // Create document in Firestore
-      const documentsRef = collection(db, 'documents');
-      const docRef = await addDoc(documentsRef, {
-        projectId: document.projectId,
-        name: document.name,
-        type: document.type,
-        folderId: folderId,
-        version: 1,
-        dateModified: new Date().toISOString(),
-        url,
-        storagePath,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        metadata: {
-          originalFilename: file.name,
-          contentType: file.type,
-          size: file.size,
-          version: 1
+      try {
+        const documentsRef = collection(db, 'documents');
+        const docRef = await addDoc(documentsRef, {
+          projectId: document.projectId,
+          name: document.name,
+          type: document.type,
+          folderId: folderId,
+          version: 1,
+          dateModified: new Date().toISOString(),
+          url,
+          storagePath,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+          metadata: {
+            originalFilename: file.name,
+            contentType: file.type,
+            size: file.size,
+            version: 1
+          }
+        });
+
+        console.log(`Document record created in Firestore: ${docRef.id}`);
+
+        // Create initial version record
+        try {
+          const versionsRef = collection(docRef, 'versions');
+          await setDoc(doc(versionsRef, 'v1'), {
+            version: 1,
+            url,
+            uploadedAt: serverTimestamp(),
+            metadata: {
+              originalFilename: file.name,
+              contentType: file.type,
+              size: file.size
+            }
+          });
+          console.log(`Document version record created`);
+        } catch (versionError) {
+          console.warn('Error creating version record (non-critical):', versionError);
+          // Continue even if version creation fails
         }
-      });
 
-      // Create initial version record
-      const versionsRef = collection(docRef, 'versions');
-      await setDoc(doc(versionsRef, 'v1'), {
-        version: 1,
-        url,
-        uploadedAt: serverTimestamp(),
-        metadata: {
-          originalFilename: file.name,
-          contentType: file.type,
-          size: file.size
+        // Update folder metadata
+        try {
+          const folderRef = doc(db, 'folders', folderId);
+          await updateDoc(folderRef, {
+            'metadata.documentCount': increment(1),
+            'metadata.lastUpdated': serverTimestamp()
+          });
+          console.log(`Folder metadata updated`);
+        } catch (folderUpdateError) {
+          console.warn('Error updating folder metadata (non-critical):', folderUpdateError);
+          // Continue even if folder metadata update fails
         }
-      });
 
-      // Update folder metadata
-      const folderRef = doc(db, 'folders', folderId);
-      await updateDoc(folderRef, {
-        'metadata.documentCount': increment(1),
-        'metadata.lastUpdated': serverTimestamp()
-      });
-
-      return {
-        id: docRef.id,
-        projectId: document.projectId,
-        name: document.name,
-        type: document.type,
-        folderId,
-        version: 1,
-        dateModified: new Date().toISOString(),
-        url
-      };
+        return {
+          id: docRef.id,
+          projectId: document.projectId,
+          name: document.name,
+          type: document.type,
+          folderId,
+          version: 1,
+          dateModified: new Date().toISOString(),
+          url
+        };
+      } catch (firestoreError) {
+        console.error('Error creating document record in Firestore:', firestoreError);
+        throw new Error('Failed to save document metadata. The file was uploaded but record creation failed.');
+      }
     } catch (error) {
       console.error('Error creating document:', error);
       throw error;

@@ -32,9 +32,46 @@ const COLLECTION = "projects";
 export const projectService = {
   async getAll(): Promise<Project[]> {
     const snapshot = await getDocs(collection(db, COLLECTION));
-    return snapshot.docs.map(
-      (doc) => ({ id: doc.id, ...doc.data() } as Project)
-    );
+    
+    // Process the data to ensure consistent structure
+    return snapshot.docs.map((doc) => {
+      const data = doc.data();
+      
+      // Ensure metadata is properly structured
+      const metadata = data.metadata || {};
+      
+      // Handle location specifically
+      const location = metadata.location || { city: '', state: '', country: '' };
+      // Convert string location (if any) to object format
+      const structuredLocation = typeof location === 'string' 
+        ? { 
+            city: location.split(',')[0]?.trim() || '',
+            state: location.split(',')[1]?.trim() || '',
+            country: location.split(',')[2]?.trim() || ''
+          }
+        : location;
+      
+      // Create a properly structured project object
+      return {
+        id: doc.id,
+        name: data.name || '',
+        client: data.client || '',
+        status: data.status || 'active',
+        progress: data.progress || 0,
+        startDate: data.startDate || '',
+        endDate: data.endDate || '',
+        teamMemberIds: data.teamMemberIds || [],
+        metadata: {
+          industry: metadata.industry || '',
+          projectType: metadata.projectType || '',
+          location: structuredLocation,
+          budget: metadata.budget || '',
+          scope: metadata.scope || '',
+          ...(metadata.archivedAt && { archivedAt: metadata.archivedAt }),
+          ...(metadata.lastMilestoneUpdate && { lastMilestoneUpdate: metadata.lastMilestoneUpdate })
+        }
+      } as Project;
+    });
   },
 
   async getByUserId(userId: string): Promise<Project[]> {
@@ -51,9 +88,47 @@ export const projectService = {
   async getById(id: string): Promise<Project | null> {
     const docRef = doc(db, COLLECTION, id);
     const docSnap = await getDoc(docRef);
-    return docSnap.exists()
-      ? ({ id: docSnap.id, ...docSnap.data() } as Project)
-      : null;
+    
+    if (!docSnap.exists()) {
+      return null;
+    }
+    
+    const data = docSnap.data();
+    
+    // Ensure metadata is properly structured
+    const metadata = data.metadata || {};
+    
+    // Handle location specifically
+    const location = metadata.location || { city: '', state: '', country: '' };
+    // Convert string location (if any) to object format
+    const structuredLocation = typeof location === 'string' 
+      ? { 
+          city: location.split(',')[0]?.trim() || '',
+          state: location.split(',')[1]?.trim() || '',
+          country: location.split(',')[2]?.trim() || ''
+        }
+      : location;
+    
+    // Create a properly structured project object
+    return {
+      id: docSnap.id,
+      name: data.name || '',
+      client: data.client || '',
+      status: data.status || 'active',
+      progress: data.progress || 0,
+      startDate: data.startDate || '',
+      endDate: data.endDate || '',
+      teamMemberIds: data.teamMemberIds || [],
+      metadata: {
+        industry: metadata.industry || '',
+        projectType: metadata.projectType || '',
+        location: structuredLocation,
+        budget: metadata.budget || '',
+        scope: metadata.scope || '',
+        ...(metadata.archivedAt && { archivedAt: metadata.archivedAt }),
+        ...(metadata.lastMilestoneUpdate && { lastMilestoneUpdate: metadata.lastMilestoneUpdate })
+      }
+    } as Project;
   },
 
   async create(project: Omit<Project, "id">): Promise<Project> {
