@@ -1,7 +1,11 @@
 # Configure Netlify build settings
 [build]
-  command = "npm run build"
+  command = "npm install --legacy-peer-deps --force && npm run postinstall && npm run build"
   publish = "dist"
+
+# Use our custom dependency fix plugin
+[[plugins]]
+  package = "./netlify-plugin-dependency-fix"
 
 # Handle SPA routing by redirecting all paths to index.html
 [[redirects]]
@@ -12,6 +16,7 @@
 # Optimize build
 [build.environment]
   NODE_VERSION = "18"
+  NPM_FLAGS = "--legacy-peer-deps --force"
   
 # Enable dependency installation output for debugging
 [build.processing]

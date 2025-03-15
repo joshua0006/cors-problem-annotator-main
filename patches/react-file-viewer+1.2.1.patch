@@ -1,0 +1,16 @@
+diff --git a/package.json b/package.json
+index 90f4bf1..f9f3bdb 100644
+--- a/package.json
++++ b/package.json
+@@ -28,8 +28,8 @@
+     "react-data-grid": "2.0.60"
+   },
+   "peerDependencies": {
+-    "react": "^16.3.0",
+-    "react-dom": "^16.3.0"
++    "react": "^16.3.0 || ^17.0.0 || ^18.0.0",
++    "react-dom": "^16.3.0 || ^17.0.0 || ^18.0.0"
+   },
+   "devDependencies": {
+     "autoprefixer": "^7.1.0",
+``` 
