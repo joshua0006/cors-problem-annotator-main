@@ -1,0 +1,18 @@
+# Configure Netlify build settings
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+# Handle SPA routing by redirecting all paths to index.html
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# Optimize build
+[build.environment]
+  NODE_VERSION = "18"
+  
+# Enable dependency installation output for debugging
+[build.processing]
+  skip_processing = false 

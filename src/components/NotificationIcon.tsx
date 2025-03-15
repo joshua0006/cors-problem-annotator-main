@@ -31,13 +31,23 @@ export const NotificationIcon: React.FC = () => {
   const readCount = notifications.filter(n => n.read).length;
   
   useEffect(() => {
-    // Subscribe to notifications collection
-    const unsubscribe = subscribeToNotifications((newNotifications) => {
-      setNotifications(newNotifications);
-      console.log('Received notifications:', newNotifications);
-    });
-    
-    return () => unsubscribe();
+    try {
+      // Subscribe to notifications collection
+      const unsubscribe = subscribeToNotifications((newNotifications) => {
+        setNotifications(newNotifications);
+        console.log('Received notifications:', newNotifications);
+      });
+      
+      return () => {
+        // Make sure unsubscribe is defined before calling it
+        if (typeof unsubscribe === 'function') {
+          unsubscribe();
+        }
+      };
+    } catch (error) {
+      console.error('Error subscribing to notifications:', error);
+      return () => {}; // Return empty cleanup function on error
+    }
   }, []);
   
   // Close notification panel when clicking outside
