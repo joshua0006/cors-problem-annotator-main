@@ -8,7 +8,8 @@
     "build": "tsc && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "postinstall": "patch-package"
+    "postinstall": "patch-package || node ./src/patches/fixReactFileViewerCjs.cjs || node --input-type=module ./src/patches/fixReactFileViewer.js",
+    "fix-dependencies": "node ./src/patches/fixReactFileViewerCjs.cjs"
   },
   "dependencies": {
     "@types/uuid": "^10.0.0",

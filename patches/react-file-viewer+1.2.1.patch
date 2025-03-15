@@ -1,7 +1,7 @@
-diff --git a/package.json b/package.json
+diff --git a/node_modules/react-file-viewer/package.json b/node_modules/react-file-viewer/package.json
 index 90f4bf1..f9f3bdb 100644
---- a/package.json
-+++ b/package.json
+--- a/node_modules/react-file-viewer/package.json
++++ b/node_modules/react-file-viewer/package.json
 @@ -28,8 +28,8 @@
      "react-data-grid": "2.0.60"
    },
@@ -13,4 +13,4 @@ index 90f4bf1..f9f3bdb 100644
    },
    "devDependencies": {
      "autoprefixer": "^7.1.0",
-``` 
+```

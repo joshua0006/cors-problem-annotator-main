@@ -1,6 +1,6 @@
 # Configure Netlify build settings
 [build]
-  command = "npm install --legacy-peer-deps --force && npm run postinstall && npm run build"
+  command = "rm -rf node_modules && npm cache clean --force && npm install --legacy-peer-deps --force && npm run fix-dependencies && npm run build"
   publish = "dist"
 
 # Use our custom dependency fix plugin
