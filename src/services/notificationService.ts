@@ -1,4 +1,4 @@
-import { collection, query, where, orderBy, limit, getDocs, addDoc, updateDoc, doc, onSnapshot, Timestamp, serverTimestamp } from 'firebase/firestore';
+import { collection, query, where, orderBy, limit, getDocs, addDoc, updateDoc, doc, onSnapshot, Timestamp, serverTimestamp, deleteDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 
 export interface Notification {
@@ -209,6 +209,58 @@ export const getUnreadNotificationCount = async (): Promise<number> => {
     return querySnapshot.size;
   } catch (error) {
     console.error('Error getting unread notification count:', error);
+    throw error;
+  }
+};
+
+/**
+ * Deletes all read notifications from Firestore
+ * @returns The number of notifications deleted
+ */
+export const deleteReadNotifications = async (): Promise<number> => {
+  try {
+    console.log('Deleting all read notifications');
+    const notificationsRef = collection(db, 'notifications');
+    const q = query(
+      notificationsRef,
+      where('read', '==', true)
+    );
+    
+    const querySnapshot = await getDocs(q);
+    
+    if (querySnapshot.empty) {
+      console.log('No read notifications to delete');
+      return 0;
+    }
+    
+    console.log(`Found ${querySnapshot.size} read notifications to delete`);
+    
+    const deletePromises = querySnapshot.docs.map(document => 
+      deleteDoc(doc(db, 'notifications', document.id))
+    );
+    
+    await Promise.all(deletePromises);
+    console.log(`Successfully deleted ${querySnapshot.size} read notifications`);
+    
+    return querySnapshot.size;
+  } catch (error) {
+    console.error('Error deleting read notifications:', error);
+    throw error;
+  }
+};
+
+/**
+ * Deletes a specific notification by ID
+ * @param notificationId The ID of the notification to delete
+ */
+export const deleteNotification = async (notificationId: string): Promise<void> => {
+  try {
+    console.log(`Deleting notification with ID: ${notificationId}`);
+    const notificationRef = doc(db, 'notifications', notificationId);
+    await deleteDoc(notificationRef);
+    console.log(`Successfully deleted notification: ${notificationId}`);
+  } catch (error) {
+    console.error(`Error deleting notification ${notificationId}:`, error);
     throw error;
   }
 }; 

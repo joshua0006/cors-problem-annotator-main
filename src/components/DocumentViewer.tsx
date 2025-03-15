@@ -42,6 +42,7 @@ import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { PDFViewer } from "./PDFViewer";
 import { Toolbar } from "./Toolbar";
 import { Button } from "./ui/button";
+import { MediaViewer, isImage, isVideo, isAudio, isPDF, getMediaTypeInfo } from "../utils/mediaUtils";
 
 interface Document {
   id: string;
@@ -52,6 +53,11 @@ interface Document {
   dateModified: string;
   folderId?: string;
   projectId: string;
+  metadata?: {
+    contentType?: string;
+    size?: number;
+    originalFilename?: string;
+  };
 }
 
 interface DocumentComment {
@@ -884,6 +890,40 @@ const DocumentViewer: React.FC<DocumentViewerProps> = ({
               style={{ height: "100%" }}
             >
               <PDFViewer file={document.url} documentId={document.id} />
+            </div>
+          </div>
+        ) : isImage(document.name, document.metadata?.contentType) ? (
+          <div className="h-full flex items-center justify-center bg-white rounded-lg shadow-sm p-4">
+            <img 
+              src={document.url} 
+              alt={document.name} 
+              className="max-w-full max-h-full object-contain" 
+              onError={() => console.error("Image loading error")} 
+            />
+          </div>
+        ) : isVideo(document.name, document.metadata?.contentType) ? (
+          <div className="h-full flex items-center justify-center bg-white rounded-lg shadow-sm p-4">
+            <video 
+              src={document.url} 
+              controls 
+              className="max-w-full max-h-full" 
+              onError={() => console.error("Video loading error")}
+            >
+              Your browser does not support the video tag.
+            </video>
+          </div>
+        ) : isAudio(document.name, document.metadata?.contentType) ? (
+          <div className="h-full flex items-center justify-center bg-white rounded-lg shadow-sm p-4">
+            <div className="flex flex-col items-center">
+              <p className="mb-2 text-gray-700">{document.name}</p>
+              <audio 
+                src={document.url} 
+                controls 
+                className="w-full" 
+                onError={() => console.error("Audio loading error")}
+              >
+                Your browser does not support the audio tag.
+              </audio>
             </div>
           </div>
         ) : (

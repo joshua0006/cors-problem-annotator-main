@@ -2262,7 +2262,7 @@ export default function DocumentActions({
     <div className="relative">
       <div className="flex gap-2 items-center">
         <button
-          className="inline-flex items-center gap-1 rounded bg-primary-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-primary-700"
+          className="inline-flex items-center gap-1 rounded bg-primary-600 px-3 py-3 text-sm font-medium text-white hover:bg-primary-700"
           onClick={() => setShowFolderInput(true)}
           disabled={isProcessing}
         >
@@ -2270,7 +2270,7 @@ export default function DocumentActions({
           New Folder
         </button>
         <button
-          className="inline-flex items-center gap-1 rounded bg-primary-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-primary-700"
+          className="inline-flex items-center gap-1 rounded bg-primary-600 px-3 py-3 text-sm font-medium text-white hover:bg-primary-700"
           onClick={() => setShowFileInput(true)}
           disabled={isProcessing}
         >
@@ -2279,7 +2279,7 @@ export default function DocumentActions({
         </button>
         {currentFolderId && (
           <button
-            className="inline-flex items-center gap-1 rounded bg-green-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-green-700"
+            className="inline-flex items-center gap-1 rounded bg-green-600 px-3 py-3 text-sm font-medium text-white hover:bg-green-700"
             onClick={() => setShowTokenGenerator(true)}
             disabled={isProcessing}
           >

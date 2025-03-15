@@ -541,49 +541,44 @@ const Settings = ({ projects, onUpdateProject }: SettingsProps) => {
             </div>
 
             <div className="space-y-3">
-              <AnimatePresence mode="wait">
-                {archivedProjects.map((project) => (
-                  <motion.div
-                    key={project.id}
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    className="flex items-center justify-between p-3 bg-white border border-gray-200 rounded-lg"
-                  >
-                    <div>
-                      <h4 className="font-medium text-gray-900">
-                        {project.name}
-                      </h4>
-                      <p className="text-sm text-gray-500">{project.client}</p>
-                      {project.metadata?.archivedAt && (
-                        <p className="text-xs text-gray-400">
-                          Archived on{" "}
-                          {new Date(
-                            project.metadata.archivedAt
-                          ).toLocaleDateString()}
-                        </p>
-                      )}
-                    </div>
-                    <div className="flex items-center space-x-2">
-                      <button
-                        onClick={() => handleUnarchive(project.id)}
-                        className="flex items-center space-x-2 px-3 py-1.5 text-sm text-blue-600 hover:bg-blue-50 rounded-md transition-colors"
-                      >
-                        <ArrowUpCircle className="w-4 h-4" />
-                        <span>Restore</span>
-                      </button>
-                      <button
-                        onClick={() => setProjectToDelete(project)}
-                        className="flex items-center space-x-2 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 rounded-md transition-colors"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                        <span>Delete</span>
-                      </button>
-                    </div>
-                  </motion.div>
-                ))}
-              </AnimatePresence>
-
+              {archivedProjects.map((project) => (
+                <div
+                  key={project.id}
+                  className="flex items-center justify-between p-3 bg-white border border-gray-200 rounded-lg"
+                >
+                  <div>
+                    <h4 className="font-medium text-gray-900">
+                      {project.name}
+                    </h4>
+                    <p className="text-sm text-gray-500">{project.client}</p>
+                    {project.metadata?.archivedAt && (
+                      <p className="text-xs text-gray-400">
+                        Archived on{" "}
+                        {new Date(
+                          project.metadata.archivedAt
+                        ).toLocaleDateString()}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <button
+                      onClick={() => handleUnarchive(project.id)}
+                      className="flex items-center space-x-2 px-3 py-1.5 text-sm text-blue-600 hover:bg-blue-50 rounded-md transition-colors"
+                    >
+                      <ArrowUpCircle className="w-4 h-4" />
+                      <span>Restore</span>
+                    </button>
+                    <button
+                      onClick={() => setProjectToDelete(project)}
+                      className="flex items-center space-x-2 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 rounded-md transition-colors"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      <span>Delete</span>
+                    </button>
+                  </div>
+                </div>
+              ))}
+              
               {archivedProjects.length === 0 && (
                 <p className="text-gray-500 text-center py-4">
                   No archived projects

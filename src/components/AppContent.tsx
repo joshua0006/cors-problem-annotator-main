@@ -21,6 +21,7 @@ import { useTeamManager } from '../hooks/useTeamManager';
 import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import { createShareToken } from '../services/shareService';
+import { documentService } from '../services';
 
 // Custom components for folder and file routes
 const DocumentsPage: React.FC<{
@@ -219,6 +220,9 @@ export default function AppContent() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const params = useParams();
+  
+  // Add state for tracking notification navigation
+  const [pendingNotificationNavigation, setPendingNotificationNavigation] = useState<any>(null);
   
   const {
     documents,
@@ -519,6 +523,76 @@ export default function AppContent() {
     }
   }, [location.state, projects, selectedProject]);
 
+  // Handle location state changes from notification navigation
+  useEffect(() => {
+    // Check if we have navigation state from a notification
+    if (location.state && location.state.fromNotification) {
+      console.log('Received notification navigation state:', location.state);
+      
+      const navigationState = location.state;
+      
+      // Store the pending navigation state
+      setPendingNotificationNavigation(navigationState);
+      
+      // Switch to the correct project if needed
+      if (navigationState.targetProjectId && 
+          (!selectedProject || selectedProject.id !== navigationState.targetProjectId)) {
+        const project = projects.find(p => p.id === navigationState.targetProjectId);
+        if (project) {
+          console.log(`Switching to project ${project.id} from notification`);
+          setSelectedProject(project);
+        }
+      }
+      
+      // Set the folder ID if provided
+      if (navigationState.targetFolderId && currentFolderId !== navigationState.targetFolderId) {
+        console.log(`Setting folder ID ${navigationState.targetFolderId} from notification`);
+        setCurrentFolderId(navigationState.targetFolderId);
+      }
+    }
+  }, [location.state, projects, selectedProject, currentFolderId]);
+  
+  // Process pending notification navigation after project/folder changes
+  useEffect(() => {
+    if (pendingNotificationNavigation) {
+      const {targetProjectId, targetFolderId, targetFileId} = pendingNotificationNavigation;
+      
+      // Check if project and folder are now correct
+      const projectMatches = !targetProjectId || 
+        (selectedProject && selectedProject.id === targetProjectId);
+      const folderMatches = !targetFolderId || 
+        (currentFolderId === targetFolderId);
+      
+      if (projectMatches && folderMatches) {
+        console.log('Project and folder now match notification target, clearing pending navigation');
+        
+        // Clear the pending navigation
+        setPendingNotificationNavigation(null);
+        
+        // Perform a refresh to ensure we have the latest data
+        if (selectedProject && currentFolderId) {
+          console.log('Refreshing document list after notification navigation');
+          documentService.getByFolderId(currentFolderId)
+            .then((docs: Document[]) => {
+              console.log(`Loaded ${docs.length} documents after notification navigation`);
+              
+              // Look for the target file if specified
+              if (targetFileId) {
+                const targetDoc = docs.find((doc: Document) => doc.id === targetFileId);
+                if (targetDoc) {
+                  console.log(`Found target file ${targetDoc.name}, navigating to it`);
+                  // The URL navigation will happen automatically due to the file being found
+                }
+              }
+            })
+            .catch((err: Error) => {
+              console.error('Error refreshing documents after notification:', err);
+            });
+        }
+      }
+    }
+  }, [pendingNotificationNavigation, selectedProject, currentFolderId, documents]);
+
   const handleUpdateProject = async (id: string, updates: Partial<Project>) => {
     try {
       await projectService.update(id, updates);
@@ -535,7 +609,7 @@ export default function AppContent() {
   };
 
   return (
-    <AnimatePresence mode="wait">
+    <AnimatePresence mode="sync">
       <Routes>
         <Route
           path="/"
@@ -676,8 +750,8 @@ export default function AppContent() {
               currentFolderId={currentFolderId}
               onFolderSelect={handleFolderSelect}
               onProjectSelect={setSelectedProject}
-                  onUpdateProject={handleUpdateProject}
-                  tasks={tasks}
+              onUpdateProject={handleUpdateProject}
+              tasks={tasks}
               createDocument={createDocument}
               createFolder={createFolder}
               updateFolder={updateFolder}
@@ -697,7 +771,7 @@ export default function AppContent() {
               folders={folders}
               documents={documents}
               currentFolderId={currentFolderId}
-                  onFolderSelect={handleFolderSelect}
+              onFolderSelect={handleFolderSelect}
               onProjectSelect={setSelectedProject}
               onUpdateProject={handleUpdateProject}
               tasks={tasks}

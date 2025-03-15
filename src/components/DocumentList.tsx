@@ -10,7 +10,7 @@ import {
   Home,
   Share2,
 } from "lucide-react";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Document, Folder } from "../types";
 import DocumentBreadcrumbs from "./DocumentBreadcrumbs";
 import DocumentActions from "./DocumentActions";
@@ -22,6 +22,7 @@ import { useToast } from '../contexts/ToastContext';
 import { useAuth } from '../contexts/AuthContext';
 import { ConfirmDialog } from './ui/ConfirmDialog';
 import { RenameDialog } from './ui/RenameDialog';
+import { NOTIFICATION_DOCUMENT_UPDATE_EVENT } from './NotificationIcon';
 
 // Local type definition for the DocumentViewer's Folder type
 interface ViewerFolder {
@@ -371,6 +372,69 @@ export default function DocumentList({
       }
     }
   }, [selectedFile, documents, projectId, selectedDocument]); // Include dependencies that should trigger re-checking
+
+  // Listen for notification document update events
+  useEffect(() => {
+    const handleNotificationUpdate = (event: CustomEvent) => {
+      console.log('Notification document update event received:', event.detail);
+      
+      const { fileId, folderId, projectId: notificationProjectId } = event.detail;
+      
+      // Only process events relevant to the current project
+      if (notificationProjectId && notificationProjectId !== projectId) {
+        console.log('Notification is for a different project, ignoring');
+        return;
+      }
+      
+      // If we have a refresh function, call it to update the document list
+      if (onRefresh) {
+        console.log('Refreshing document list due to notification update');
+        onRefresh().then(() => {
+          // After refresh, navigate to the referenced file or folder if needed
+          if (fileId) {
+            const fileToSelect = documents.find(doc => doc.id === fileId);
+            if (fileToSelect) {
+              console.log('Navigating to file from notification:', fileToSelect.name);
+              if (onPreview) {
+                onPreview(fileToSelect);
+              }
+            } else {
+              console.log('File not found in current document list, may need to fetch');
+              // If the file is in a different folder, we may need to navigate to that folder first
+              if (folderId && folderId !== currentFolder?.id) {
+                const targetFolder = folders.find(folder => folder.id === folderId);
+                if (targetFolder && onFolderSelect) {
+                  console.log('Navigating to folder from notification:', targetFolder.name);
+                  onFolderSelect(targetFolder);
+                }
+              }
+            }
+          } else if (folderId && folderId !== currentFolder?.id) {
+            // Just navigate to the folder
+            const targetFolder = folders.find(folder => folder.id === folderId);
+            if (targetFolder && onFolderSelect) {
+              console.log('Navigating to folder from notification:', targetFolder.name);
+              onFolderSelect(targetFolder);
+            }
+          }
+        });
+      }
+    };
+    
+    // Add event listener
+    document.addEventListener(
+      NOTIFICATION_DOCUMENT_UPDATE_EVENT, 
+      handleNotificationUpdate as EventListener
+    );
+    
+    // Clean up event listener
+    return () => {
+      document.removeEventListener(
+        NOTIFICATION_DOCUMENT_UPDATE_EVENT, 
+        handleNotificationUpdate as EventListener
+      );
+    };
+  }, [onRefresh, documents, folders, currentFolder, onFolderSelect, onPreview, projectId]);
 
   return (
     <div
