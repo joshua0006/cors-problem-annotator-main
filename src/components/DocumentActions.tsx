@@ -128,6 +128,7 @@ export default function DocumentActions({
   const [processingFile, setProcessingFile] = useState<string>('');
   const [processedCount, setProcessedCount] = useState(0);
   const [totalCount, setTotalCount] = useState(0);
+  const [isTokenUpload, setIsTokenUpload] = useState(false);
 
   const folderNameInputRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLDivElement>(null);
@@ -308,6 +309,7 @@ export default function DocumentActions({
     return 'other';
   };
 
+  // Update the handleCreateDocument function to better handle root folder uploads
   const handleCreateDocument = async () => {
     if (isProcessing || !selectedFile || !newFileName.trim()) {
       setError('Please select a file and provide a name');
@@ -337,63 +339,85 @@ export default function DocumentActions({
         });
       }, 300);
 
-      // Upload the document with enhanced Firebase sync reliability
-      const documentType = getDocumentType(selectedFile);
+      // Determine the target folder name for display
+      const targetFolderName = selectedFolderId 
+        ? folders.find(f => f.id === selectedFolderId)?.name || "Selected Folder" 
+        : "Root Folder";
       
+      // Log the target folder for upload
+      console.log(`🔍 UPLOADING FILE TO: ${selectedFolderId ? `Folder ID: "${selectedFolderId}" (${targetFolderName})` : 'Root folder'}`);
+      
+      // Validate the folder ID if one is selected (root doesn't need validation)
+      if (selectedFolderId) {
+        const isValidFolder = await validateFolderId(selectedFolderId, { retries: 2, delay: 500 });
+        if (!isValidFolder) {
+          console.error(`❌ Selected folder "${selectedFolderId}" could not be validated`);
+          setError(`The selected folder could not be found. Please try selecting a different folder.`);
+          throw new Error(`Invalid folder ID: ${selectedFolderId}`);
+        }
+      }
+      
+      // Create the document with enhanced Firebase sync reliability
+      const documentType = getDocumentType(selectedFile);
       await ensureFirebaseSync(async () => {
         await onCreateDocument(newFileName.trim(), documentType, selectedFile, selectedFolderId);
-        console.log(`Firebase document creation complete: "${newFileName.trim()}" in folder "${selectedFolderId || 'root'}"`);
+        console.log(`✅ Firebase document creation complete: "${newFileName.trim()}" in ${selectedFolderId ? `folder "${targetFolderName}"` : 'Root folder'}`);
       });
       
-      // Create a notification for the file upload with enhanced sync
+      // Create a notification for the file upload - for guests or token uploads
       try {
-        // Get folder name
-        const folder = selectedFolderId 
-          ? folders.find(f => f.id === selectedFolderId) 
-          : { name: "Root" };
-        
-        const folderName = folder?.name || "Unknown Folder";
-        
-        // Use the user's name if logged in, otherwise use the entered uploader name
-        const uploader = user?.displayName || uploaderName.trim();
-        
-        // Create the link to the document with proper context
-        let link = `/documents`;
+        // Create notifications for guest uploads or token-based uploads
+        if (!user || isTokenUpload) {
+          // Get folder name
+          const folderName = targetFolderName;
           
-        if (projectId) {
-          link = `/documents/projects/${projectId}`;
+          // For guest uploads, we'll use the entered uploader name
+          const uploader = uploaderName.trim();
           
-          if (selectedFolderId) {
+          // Create the link to the document with proper context
+          let link = `/documents`;
+          
+          if (projectId) {
+            link = `/documents/projects/${projectId}`;
+            
+            if (selectedFolderId) {
+              link += `/folders/${selectedFolderId}`;
+            }
+          } else if (selectedFolderId) {
             link += `/folders/${selectedFolderId}`;
           }
-        } else if (selectedFolderId) {
-          link += `/folders/${selectedFolderId}`;
-        }
-        
-        // Create notification directly in Firestore with retry mechanism
-        await ensureFirebaseSync(async () => {
-          const notificationsRef = collection(db, 'notifications');
-          await addDoc(notificationsRef, {
-            iconType: 'file-upload',
-            type: 'info',
-            message: `${uploader} uploaded "${newFileName.trim()}" to ${folderName}`,
-            link: link,
-            read: false,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-            metadata: {
-              contentType: selectedFile.type,
-              fileName: selectedFile.name,
-              folderId: selectedFolderId || '',
-              folderName: folderName,
-              guestName: uploader,
-              uploadDate: new Date().toISOString(),
-              projectId: projectId || ''
-            }
+          
+          // Create notification for guest uploads or token-based uploads
+          await ensureFirebaseSync(async () => {
+            const notificationsRef = collection(db, 'notifications');
+            await addDoc(notificationsRef, {
+              iconType: 'file-upload',
+              type: 'info',
+              message: `${uploader} uploaded "${newFileName.trim()}" to ${folderName}`,
+              link: link,
+              read: false,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+              metadata: {
+                contentType: selectedFile.type,
+                fileName: selectedFile.name,
+                folderId: selectedFolderId || '',
+                folderName: folderName,
+                isRootUpload: !selectedFolderId,
+                guestName: uploader,
+                uploadDate: new Date().toISOString(),
+                projectId: projectId || '',
+                isGuestUpload: !user,
+                isTokenUpload: isTokenUpload
+              }
+            });
+            
+            const uploadType = !user ? 'Guest' : isTokenUpload ? 'Token-based' : 'User';
+            console.log(`${uploadType} upload notification successfully created in Firebase`);
           });
-          console.log('Upload notification successfully synced with Firebase');
-        });
-        
+        } else {
+          console.log('Skipping notification creation for standard logged-in user upload');
+        }
       } catch (notificationError) {
         console.error('Error creating upload notification in Firebase:', notificationError);
         // Continue even if notification fails - don't block the main upload
@@ -410,6 +434,9 @@ export default function DocumentActions({
       clearInterval(progressInterval);
       setUploadProgress(100);
       
+      // Show success message including location
+      setError(''); // Clear any previous errors
+      
       setTimeout(() => {
         setNewFileName('');
         setSelectedFile(null);
@@ -417,10 +444,11 @@ export default function DocumentActions({
         setSelectedFolderId(currentFolderId);
         setShowFileInput(false);
         setUploadProgress(0);
-      }, 500);
+        setIsTokenUpload(false); // Reset the token upload flag
+      }, 1500); // Longer timeout to ensure user sees the completion
     } catch (error) {
-      console.error('Error ensuring document creation is reflected in Firebase:', error);
-      setError(error instanceof Error ? error.message : 'Failed to upload document and sync with database');
+      console.error('Error uploading document:', error);
+      setError(error instanceof Error ? error.message : 'Failed to upload document');
     } finally {
       setIsProcessing(false);
       setIsUploading(false);
@@ -448,78 +476,81 @@ export default function DocumentActions({
   };
 
   const handleFolderSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
-    setError('');
+    const files = Array.from(event.target.files || []);
+    
+    if (files.length === 0) {
+      setError('No files selected');
+      return;
+    }
+    
+    // Process file paths to extract structure
+    let hasValidPath = false;
+    let rootFolderName = '';
+    
+    // Extract the root folder name first
+    for (const file of files) {
+      // Try to get the path from the file object
+      const relativePath = file.webkitRelativePath || (file as any).relativePath;
+      
+      if (relativePath) {
+        hasValidPath = true;
+        const pathParts = relativePath.split('/');
+        if (pathParts.length > 0) {
+          rootFolderName = pathParts[0];
+          break;
+        }
+      }
+    }
+    
+    if (!hasValidPath) {
+      setError('Selected items do not appear to be a folder structure');
+      return;
+    }
+    
+    console.log(`Detected root folder: "${rootFolderName}"`);
+    
+    setNewFolderName(rootFolderName);
+    setNewFileName(rootFolderName);
+    setFolderFiles(files);
     setIsFolderUpload(true);
+    setError('');
     
-    const files = event.target.files;
-    if (!files || files.length === 0) {
-      setError('No files selected. Make sure you selected a folder with files.');
-      return;
-    }
+    // Create a list of all folders (including empty ones) from the file paths
+    const allPaths = new Set<string>();
+    const emptyFolders = new Set<string>();
     
-    // Convert FileList to array
-    const fileArray = Array.from(files);
-    console.log(`Folder selected with ${fileArray.length} files`);
-    
-    // Debug log the first few files to better understand the folder structure
-    if (fileArray.length > 0) {
-      console.log('First 3 files details:');
-      fileArray.slice(0, 3).forEach((file, index) => {
-        console.log(`File ${index + 1}:`, {
-          name: file.name,
-          webkitRelativePath: file.webkitRelativePath,
-          relativePath: (file as any).relativePath,
-          size: file.size,
-          type: file.type,
-          hasWebkitPath: !!file.webkitRelativePath,
-          hasRelativePath: !!(file as any).relativePath
-        });
-      });
-    }
-    
-    // Check if any of the files have webkitRelativePath or relativePath (for browser compatibility)
-    const hasPath = fileArray.some(file => {
-      return file.webkitRelativePath || (file as any).relativePath;
-    });
-    
-    if (!hasPath) {
-      console.error('No path information found in selected files');
-      setError('The selected files don\'t contain path information. Browser may not support folder uploads.');
-      return;
-    }
-    
-    setFolderFiles(fileArray);
-    
-    // Extract folder name from the first file's path
-    const getRelativePath = (file: File) => {
+    // Extract all paths from files
+    files.forEach(file => {
       const path = file.webkitRelativePath || (file as any).relativePath || '';
-      console.log(`Path for ${file.name}: ${path}`);
-      return path;
-    };
-    
-    // Find unique top-level folders to see what was selected
-    const uniqueFolders = new Set<string>();
-    fileArray.forEach(file => {
-      const path = getRelativePath(file);
-      if (path) {
-        const topLevelFolder = path.split('/')[0];
-        uniqueFolders.add(topLevelFolder);
+      if (!path) return;
+      
+      const parts = path.split('/');
+      // Process each segment of the path (directory)
+      for (let i = 1; i < parts.length; i++) {
+        const dirPath = parts.slice(0, i).join('/');
+        if (dirPath) {
+          allPaths.add(dirPath);
+        }
       }
     });
     
-    console.log('Detected top-level folders:', Array.from(uniqueFolders));
+    // Check for empty folders (directories that don't contain files directly)
+    files.forEach(file => {
+      const path = file.webkitRelativePath || (file as any).relativePath || '';
+      if (!path) return;
+      
+      const parts = path.split('/');
+      const parentDir = parts.slice(0, parts.length - 1).join('/');
+      allPaths.delete(parentDir); // Remove from potential empty folders since it contains a file
+    });
     
-    if (fileArray.length > 0) {
-      const path = getRelativePath(fileArray[0]);
-      if (path) {
-        const folderPath = path.split('/')[0];
-        setCurrentFolderPath(folderPath);
-        setNewFileName(folderPath);
-        console.log(`Using folder name for upload: ${folderPath}`);
-      } else {
-        setError('Could not determine folder name. Try selecting the folder again.');
-      }
+    // Any remaining paths are potentially empty folders
+    if (allPaths.size > 0) {
+      console.log(`Detected ${allPaths.size} potentially empty folders:`, Array.from(allPaths));
     }
+    
+    // Set the current folder path for use in other functions
+    setCurrentFolderPath(rootFolderName);
   };
 
   // Add a helper function to extract file paths safely
@@ -581,7 +612,13 @@ export default function DocumentActions({
   const { uploadStats, updateStats } = useUploadTracker();
 
   // Replace the validateFolderId function with this enhanced version
-  const validateFolderId = async (folderId: string, options?: { retries?: number, delay?: number }): Promise<boolean> => {
+  const validateFolderId = async (folderId: string | null | undefined, options?: { retries?: number, delay?: number }): Promise<boolean> => {
+    // Special case: If folderId is null or undefined, it represents the root folder, which is always valid
+    if (folderId === null || folderId === undefined) {
+      console.log(`✅ FOLDER VALIDATION: Root folder is always valid`);
+      return true;
+    }
+    
     const retries = options?.retries || 3;
     const delay = options?.delay || 1000;
     
@@ -802,12 +839,42 @@ export default function DocumentActions({
       rootFolder.name = currentFolderPath || 'Uploads';
       rootFolder.path = rootFolder.name;
       console.log(`Root folder name set to (fallback): "${rootFolder.name}"`);
+    } else {
+      // Handle completely empty folder case (no files at all)
+      console.warn('Empty folder upload detected - using current folder name');
+      rootFolder.name = currentFolderPath || newFileName || 'EmptyFolder';
+      rootFolder.path = rootFolder.name;
+      console.log(`Root folder name for empty folder: "${rootFolder.name}"`);
     }
     
     // Normalize path separators and remove leading/trailing slashes
     const normalizePath = (path: string): string => {
       return path.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
     };
+    
+    // Track all unique directory paths for empty folder detection
+    const allDirectoryPaths = new Set<string>();
+    
+    // Process all file paths to extract directory structure
+    files.forEach(file => {
+      const filePath = file.webkitRelativePath || (file as any).relativePath || '';
+      if (!filePath) return;
+      
+      const normalizedPath = normalizePath(filePath);
+      const parts = normalizedPath.split('/');
+      
+      // Skip files with invalid paths
+      if (parts.length <= 1) return;
+      
+      // Extract all directory paths (excluding the filename)
+      const dirParts = parts.slice(0, parts.length - 1);
+      
+      // Store all path segments (to capture empty directories)
+      for (let i = 1; i < dirParts.length + 1; i++) {
+        const dirPath = dirParts.slice(0, i).join('/');
+        allDirectoryPaths.add(dirPath);
+      }
+    });
     
     // Create a function to get or create a folder node at a specific path
     const getOrCreateFolderNode = (pathParts: string[]): FolderNode => {
@@ -899,47 +966,29 @@ export default function DocumentActions({
       targetFolder.files.push(file);
     });
     
-    // Function to output the folder structure for debugging
-    const logFolderStructure = (node: FolderNode, indent = 0): void => {
-      const spacing = ' '.repeat(indent * 2);
-      console.log(`${spacing}📁 ${node.name || 'ROOT'} (${node.files.length} files)`);
+    // Create folder nodes for empty directories
+    // Process all the directory paths we collected earlier
+    allDirectoryPaths.forEach(dirPath => {
+      if (!dirPath) return;
       
-      if (node.files.length > 0) {
-        node.files.slice(0, Math.min(3, node.files.length)).forEach(file => {
-          console.log(`${spacing}  📄 ${file.name}`);
-        });
-        
-        if (node.files.length > 3) {
-          console.log(`${spacing}  ... and ${node.files.length - 3} more files`);
-        }
+      const pathParts = dirPath.split('/');
+      // Ensure the root folder name is included
+      if (pathParts[0] !== rootFolder.name) {
+        pathParts.unshift(rootFolder.name);
       }
       
-      node.subfolders.forEach(subfolder => {
-        logFolderStructure(subfolder, indent + 1);
-      });
-    };
+      // Create the folder node (this will do nothing if it already exists)
+      getOrCreateFolderNode(pathParts);
+    });
     
-    // Output the complete folder structure
-    console.log('-------- FOLDER STRUCTURE --------');
-    logFolderStructure(rootFolder);
-    console.log('----------------------------------');
+    // If we have empty subfolders but no files detected at all, make sure we at least have the root folder
+    if (files.length === 0 || (rootFolder.files.length === 0 && rootFolder.subfolders.size === 0)) {
+      console.log(`📂 Creating structure for empty folder upload: "${rootFolder.name}"`);
+      // The root folder is already created, so we're good to go
+    }
     
-    // Function to count folders and files
-    const countItems = (node: FolderNode): { folders: number, files: number } => {
-      let folders = 1; // Count this node
-      let files = node.files.length;
-      
-      node.subfolders.forEach(subfolder => {
-        const { folders: subFolders, files: subFiles } = countItems(subfolder);
-        folders += subFolders;
-        files += subFiles;
-      });
-      
-      return { folders, files };
-    };
-    
-    const { folders: totalFolders, files: totalFiles } = countItems(rootFolder);
-    console.log(`Summary: ${totalFolders} folders, ${totalFiles} files total`);
+    // Log the resulting structure
+    console.log(`📊 Final folder structure: Root has ${rootFolder.files.length} files and ${rootFolder.subfolders.size} subfolders`);
     
     return rootFolder;
   };
@@ -1045,6 +1094,8 @@ export default function DocumentActions({
           await new Promise(resolve => setTimeout(resolve, BATCH_DELAY));
         }
       }
+    } else {
+      console.log(`📂 EMPTY FOLDER: "${folderNode.name}" has no files to upload directly`);
     }
     
     // Now create subfolders if any and process them
@@ -1376,6 +1427,8 @@ export default function DocumentActions({
           // Continue with other subfolders
         }
       }
+    } else {
+      console.log(`📂 NO SUBFOLDERS: "${folderNode.name}" is a leaf node or empty folder`);
     }
     
     console.log(`------- FINISHED NODE -------`);
@@ -1392,16 +1445,24 @@ export default function DocumentActions({
   // Helper function to upload a file with retry
   const uploadFileWithRetry = async (
     file: File,
-    folderId: string,
+    folderId: string | null | undefined,
     documentType: Document['type']
   ): Promise<{ success: boolean; error?: Error }> => {
-    console.log(`Attempting to upload file "${file.name}" to folder ID: "${folderId}" with Firebase sync verification`);
+    // Log whether we're uploading to a specific folder or the root
+    const targetLocation = folderId ? `folder ID: "${folderId}"` : 'root folder';
+    console.log(`Attempting to upload file "${file.name}" to ${targetLocation} with Firebase sync verification`);
     
     try {
       await ensureFirebaseSync(async () => {
-        console.log(`Using onCreateDocument with params: name="${file.name}", type="${documentType}", folderId="${folderId}"`);
-        await onCreateDocument(file.name, documentType, file, folderId);
-        console.log(`Upload SUCCESS for "${file.name}" to folder ID: "${folderId}" - confirmed in Firebase`);
+        console.log(`Using onCreateDocument with params: name="${file.name}", type="${documentType}", folderId=${folderId ? `"${folderId}"` : 'null (root)'}`);
+        await onCreateDocument(
+          file.name, 
+          documentType, 
+          file, 
+          // Convert null to undefined which is acceptable by the function signature
+          folderId === null ? undefined : folderId
+        );
+        console.log(`Upload SUCCESS for "${file.name}" to ${targetLocation} - confirmed in Firebase`);
       }, MAX_UPLOAD_RETRIES);
       
       return { success: true };
@@ -1739,6 +1800,12 @@ export default function DocumentActions({
         }
       }
       
+      // Always process the folder structure, even if the folder is empty or only has subfolders with no files
+      console.log(`📊 FOLDER STRUCTURE: ${folderStructure.subfolders.size} subfolders, ${validFiles.length} files`);
+      if (validFiles.length === 0 && folderStructure.subfolders.size > 0) {
+        console.log(`📂 EMPTY FOLDER STRUCTURE: Folder contains only empty subfolders, will still process`);
+      }
+      
       // Calculate and update tracking stats from folder structure
       const calculateStats = (node: FolderNode, level = 0): {folders: number, files: number, maxDepth: number} => {
         let folders = 1; // Count this folder
@@ -2034,43 +2101,52 @@ export default function DocumentActions({
       
       // Create a notification for the folder upload
       try {
-        // Get parent folder name
-        const folder = targetParentId 
-          ? folders.find(f => f.id === targetParentId) 
-          : { name: "Root" };
-        
-        const folderName = folder?.name || "Root";
-        
-        // Create notification directly in Firestore with enhanced sync verification
-        await ensureFirebaseSync(async () => {
-          const notificationsRef = collection(db, 'notifications');
-          await addDoc(notificationsRef, {
-            iconType: 'folder-upload',
-            type: 'info',
-            message: `${user?.displayName || 'A user'} uploaded folder "${baseFolderName}" to ${folderName} (${successfulUploads}/${totalFilesForUpload} files)`,
-            link: `/documents/projects/${projectId}/folders/${parentFolderId}`,
-            read: false,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-            metadata: {
-              folderName: baseFolderName,
-              parentFolderId: targetParentId || '',
-              parentFolderName: folderName,
-              fileCount: totalFilesForUpload,
-              successfulUploads,
-              failedUploads,
-              uploadDate: new Date().toISOString(),
-              projectId: projectId || '',
-              uploadedBy: user?.displayName || uploaderName,
-              elapsedTimeMs: Date.now() - startTime,
-              totalSizeBytes: totalUploadedBytes,
-              totalFolders: uploadStats.totalFolders,
-              deepestLevel: uploadStats.deepestLevel
-            }
-          });
+        // Skip notification creation for logged-in users
+        if (!user) {
+          // Get parent folder name
+          const folder = targetParentId 
+            ? folders.find(f => f.id === targetParentId) 
+            : { name: "Root" };
           
-          console.log(`📣 NOTIFICATION CREATED for folder upload and verified in Firebase`);
-        });
+          const folderName = folder?.name || "Root";
+          
+          // Create notification directly in Firestore with enhanced sync verification
+          // But only for guest uploads
+          await ensureFirebaseSync(async () => {
+            const notificationsRef = collection(db, 'notifications');
+            await addDoc(notificationsRef, {
+              iconType: 'folder-upload',
+              type: 'info',
+              message: `${uploaderName.trim()} uploaded folder "${baseFolderName}" to ${folderName} (${successfulUploads}/${totalFilesForUpload} files)`,
+              link: `/documents/projects/${projectId}/folders/${parentFolderId}`,
+              read: false,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+              metadata: {
+                folderName: baseFolderName,
+                parentFolderId: targetParentId || '',
+                parentFolderName: folderName,
+                fileCount: totalFilesForUpload,
+                successfulUploads,
+                failedUploads,
+                uploadDate: new Date().toISOString(),
+                projectId: projectId || '',
+                uploadedBy: uploaderName.trim(),
+                elapsedTimeMs: Date.now() - startTime,
+                totalSizeBytes: totalUploadedBytes,
+                totalFolders: uploadStats.totalFolders,
+                deepestLevel: uploadStats.deepestLevel,
+                isGuestUpload: !user,
+                isTokenUpload: isTokenUpload
+              }
+            });
+            
+            const uploadType = !user ? 'Guest' : isTokenUpload ? 'Token-based' : 'User';
+            console.log(`📣 ${uploadType} NOTIFICATION CREATED for folder upload and verified in Firebase`);
+          });
+        } else {
+          console.log('Skipping notification creation for logged-in user folder upload');
+        }
       } catch (notificationError) {
         console.error('❌ ERROR creating folder upload notification in Firebase:', notificationError);
         // Continue processing even if notification fails
@@ -2114,6 +2190,7 @@ export default function DocumentActions({
         setSelectedFolderId(currentFolderId);
         setShowFileInput(false);
         setUploadProgress(0);
+        setIsTokenUpload(false); // Reset the token upload flag
       }, 2000); // Longer timeout to ensure user sees the results
       
     } catch (error) {
@@ -2273,7 +2350,7 @@ export default function DocumentActions({
                   onChange={(e) => setSelectedFolderId(e.target.value || undefined)}
                   className="w-full pl-8 pr-4 py-2 border border-gray-200 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none bg-white"
                 >
-                  <option value="">Root</option>
+                  <option value="" className="font-medium">Root (Home)</option>
                   {folders.map((folder) => (
                     <option key={folder.id} value={folder.id}>
                       {getFolderPath(folder.id)}
@@ -2391,6 +2468,9 @@ export default function DocumentActions({
                     <p className="text-sm font-medium text-gray-900">{selectedFile.name}</p>
                     <p className="text-xs text-gray-500">
                       {(selectedFile.size / (1024 * 1024)).toFixed(2)} MB
+                    </p>
+                    <p className="text-xs text-blue-500 mt-1">
+                      Will be uploaded to: {selectedFolderId ? getFolderPath(selectedFolderId) : "Root Folder"}
                     </p>
                   </div>
                 ) : (
@@ -2557,7 +2637,11 @@ export default function DocumentActions({
               <GenerateUploadToken
                 folderId={currentFolderId}
                 folderName={folders.find(f => f.id === currentFolderId)?.name}
-                onClose={() => setShowTokenGenerator(false)}
+                onClose={() => {
+                  setShowTokenGenerator(false);
+                  // Set this to true when a token is generated
+                  setIsTokenUpload(true);
+                }}
               />
             </motion.div>
           </motion.div>
